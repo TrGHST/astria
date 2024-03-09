@@ -2,13 +2,8 @@ use anyhow::{
     bail,
     Context,
 };
-use astria_core::sequencer::v1alpha1::AbciErrorCode;
 use cnidarium::Storage;
-use sha2::{
-    Digest as _,
-    Sha256,
-};
-use tendermint::v0_37::abci::{
+use tendermint::v0_38::abci::{
     request,
     response,
     ConsensusRequest,
@@ -106,18 +101,18 @@ impl Consensus {
                     },
                 )
             }
-            ConsensusRequest::BeginBlock(begin_block) => ConsensusResponse::BeginBlock(
-                self.begin_block(begin_block)
-                    .await
-                    .context("failed to begin block")?,
-            ),
-            ConsensusRequest::DeliverTx(deliver_tx) => {
-                ConsensusResponse::DeliverTx(self.deliver_tx(deliver_tx).await)
+            ConsensusRequest::ExtendVote(_) => {
+                ConsensusResponse::ExtendVote(response::ExtendVote {
+                    vote_extension: vec![].into(),
+                })
             }
-            ConsensusRequest::EndBlock(end_block) => ConsensusResponse::EndBlock(
-                self.end_block(end_block)
+            ConsensusRequest::VerifyVoteExtension(_) => {
+                ConsensusResponse::VerifyVoteExtension(response::VerifyVoteExtension::Accept)
+            }
+            ConsensusRequest::FinalizeBlock(finalize_block) => ConsensusResponse::FinalizeBlock(
+                self.finalize_block(finalize_block)
                     .await
-                    .context("failed to end block")?,
+                    .context("failed to finalize block")?,
             ),
             ConsensusRequest::Commit => {
                 ConsensusResponse::Commit(self.commit().await.context("failed to commit")?)
@@ -195,68 +190,66 @@ impl Consensus {
     }
 
     #[instrument(skip_all, fields(
-        hash = %begin_block.hash,
-        height = %begin_block.header.height,
-        time = %begin_block.header.time,
-        proposer = %begin_block.header.proposer_address
+        hash = %finalize_block.hash,
+        height = %finalize_block.height,
+        time = %finalize_block.time,
+        proposer = %finalize_block.proposer_address
     ))]
-    async fn begin_block(
+    async fn finalize_block(
         &mut self,
-        begin_block: request::BeginBlock,
-    ) -> anyhow::Result<response::BeginBlock> {
-        let events = self
+        finalize_block: request::FinalizeBlock,
+    ) -> anyhow::Result<response::FinalizeBlock> {
+        let finalize_block = self
             .app
-            .begin_block(&begin_block, self.storage.clone())
+            .finalize_block(&finalize_block, self.storage.clone())
             .await
-            .context("failed to call App::begin_block")?;
-        Ok(response::BeginBlock {
-            events,
-        })
+            .context("failed to call App::finalize_block")?;
+        Ok(finalize_block)
     }
 
-    #[instrument(skip_all, fields(
-        tx_hash = %telemetry::display::hex(&Sha256::digest(&deliver_tx.tx))
-    ))]
-    async fn deliver_tx(&mut self, deliver_tx: request::DeliverTx) -> response::DeliverTx {
-        use crate::transaction::InvalidNonce;
+    // #[instrument(skip_all, fields(
+    //     tx_hash = %telemetry::display::hex(&Sha256::digest(&deliver_tx.tx))
+    // ))]
+    // async fn deliver_tx(&mut self, deliver_tx: request::DeliverTx) -> response::DeliverTx {
+    //     use crate::transaction::InvalidNonce;
 
-        match self
-            .app
-            .deliver_tx_after_proposal(deliver_tx)
-            .await
-            .expect("transactions must be executable or previously executed during proposal phases")
-        {
-            Ok(events) => response::DeliverTx {
-                events,
-                ..Default::default()
-            },
-            Err(e) => {
-                let code = if e.downcast_ref::<InvalidNonce>().is_some() {
-                    AbciErrorCode::INVALID_NONCE
-                } else {
-                    AbciErrorCode::INTERNAL_ERROR
-                };
-                tracing::warn!(
-                    error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                    "failed serving deliver tx request"
-                );
-                response::DeliverTx {
-                    code: code.into(),
-                    info: code.to_string(),
-                    log: format!("{e:?}"),
-                    ..Default::default()
-                }
-            }
-        }
-    }
+    //     match self
+    //         .app
+    //         .deliver_tx_after_proposal(deliver_tx)
+    //         .await
+    //         .expect("transactions must be executable or previously executed during proposal
+    // phases")     {
+    //         Ok(events) => response::DeliverTx {
+    //             events,
+    //             ..Default::default()
+    //         },
+    //         Err(e) => {
+    //             let code = if e.downcast_ref::<InvalidNonce>().is_some() {
+    //                 AbciErrorCode::INVALID_NONCE
+    //             } else {
+    //                 AbciErrorCode::INTERNAL_ERROR
+    //             };
+    //             tracing::warn!(
+    //                 error = AsRef::<dyn std::error::Error>::as_ref(&e),
+    //                 "failed serving deliver tx request"
+    //             );
+    //             response::DeliverTx {
+    //                 code: code.into(),
+    //                 info: code.to_string(),
+    //                 log: format!("{e:?}"),
+    //                 ..Default::default()
+    //             }
+    //         }
+    //     }
+    // }
 
-    #[instrument(skip_all, fields(height = %end_block.height))]
-    async fn end_block(
-        &mut self,
-        end_block: request::EndBlock,
-    ) -> anyhow::Result<response::EndBlock> {
-        self.app.end_block(&end_block).await
-    }
+    // #[instrument(skip_all, fields(height = %end_block.height))]
+    // async fn end_block(
+    //     &mut self,
+    //     end_block: request::EndBlock,
+    // ) -> anyhow::Result<response::EndBlock> {
+    //     self.app.end_block(&end_block).await
+    // }
 
     #[instrument(skip_all)]
     async fn commit(&mut self) -> anyhow::Result<response::Commit> {

@@ -11,7 +11,7 @@ use futures::{
     FutureExt,
 };
 use penumbra_tower_trace::v037::RequestExt as _;
-use tendermint::v0_37::abci::{
+use tendermint::v0_38::abci::{
     response::{
         ApplySnapshotChunk,
         ListSnapshots,
@@ -39,7 +39,7 @@ impl Service<SnapshotRequest> for Snapshot {
     }
 
     fn call(&mut self, req: SnapshotRequest) -> Self::Future {
-        let span = req.create_span();
+        // let span = req.create_span();
         async move {
             Ok(match req {
                 SnapshotRequest::ListSnapshots => {
@@ -59,7 +59,7 @@ impl Service<SnapshotRequest> for Snapshot {
                 }
             })
         }
-        .instrument(span)
+        //.instrument(span)
         .boxed()
     }
 }

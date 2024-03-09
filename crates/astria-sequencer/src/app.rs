@@ -38,6 +38,7 @@ use tendermint::{
         Event,
     },
     account,
+    AppHash,
     Hash,
 };
 use tracing::{
@@ -401,6 +402,117 @@ impl App {
         (signed_txs, validated_txs)
     }
 
+    #[instrument(name = "App::finalize_block", skip_all)]
+    pub(crate) async fn finalize_block(
+        &mut self,
+        finalize_block: &abci::request::FinalizeBlock,
+        storage: Storage,
+    ) -> anyhow::Result<abci::response::FinalizeBlock> {
+        use astria_core::sequencer::v1alpha1::AbciErrorCode;
+        use tendermint::{
+            abci::types::ExecTxResult,
+            block::Header,
+        };
+
+        use crate::transaction::InvalidNonce;
+
+        let state_tx = StateDelta::new(self.state.clone());
+        let mut arc_state_tx = Arc::new(state_tx);
+
+        // call begin_block on all components
+        let begin_block = abci::request::BeginBlock {
+            hash: finalize_block.hash.clone(),
+            byzantine_validators: finalize_block.misbehavior.clone(),
+            header: Header {
+                app_hash: AppHash::default(), // TODO
+                chain_id: self
+                    .state
+                    .get_chain_id()
+                    .await
+                    .context("failed to get chain ID from state")?
+                    .try_into()
+                    .context("invalid chain ID")?,
+                consensus_hash: Hash::default(), // TODO
+                data_hash: Some(Hash::try_from([0u8; 32].to_vec()).unwrap()), // TODO
+                evidence_hash: Some(Hash::default()), // TODO
+                height: finalize_block.height,
+                last_block_id: None,                      // TODO
+                last_commit_hash: Some(Hash::default()),  // TODO
+                last_results_hash: Some(Hash::default()), // TODO
+                next_validators_hash: finalize_block.next_validators_hash,
+                proposer_address: finalize_block.proposer_address,
+                time: finalize_block.time,
+                validators_hash: Hash::default(), // TODO
+                version: tendermint::block::header::Version {
+                    // TODO
+                    app: 0,
+                    block: 0,
+                },
+            },
+            last_commit_info: finalize_block.decided_last_commit.clone(),
+        };
+
+        AccountsComponent::begin_block(&mut arc_state_tx, &begin_block)
+            .await
+            .context("failed to call begin_block on AccountsComponent")?;
+        AuthorityComponent::begin_block(&mut arc_state_tx, &begin_block)
+            .await
+            .context("failed to call begin_block on AuthorityComponent")?;
+        IbcComponent::begin_block(&mut arc_state_tx, &begin_block)
+            .await
+            .context("failed to call finalize_block on IbcComponent")?;
+
+        // let state_tx = Arc::try_unwrap(arc_state_tx)
+        //     .expect("components should not retain copies of shared state");
+
+        let mut tx_results: Vec<ExecTxResult> = Vec::with_capacity(finalize_block.txs.len());
+        for tx in &finalize_block.txs {
+            match self.deliver_tx_after_proposal(tx).await {
+                Ok(events) => tx_results.push(ExecTxResult {
+                    events,
+                    ..Default::default()
+                }),
+                Err(e) => {
+                    // this is actually a protocol error, as only valid txs should be finalized
+                    tracing::error!(
+                        error = AsRef::<dyn std::error::Error>::as_ref(&e),
+                        "failed to finalize transaction; ignoring it",
+                    );
+                    let code = if e.downcast_ref::<InvalidNonce>().is_some() {
+                        AbciErrorCode::INVALID_NONCE
+                    } else {
+                        AbciErrorCode::INTERNAL_ERROR
+                    };
+                    tx_results.push(ExecTxResult {
+                        code: code.into(),
+                        info: code.to_string(),
+                        log: format!("{e:?}"),
+                        ..Default::default()
+                    })
+                }
+            }
+        }
+
+        let end_block = self
+            .end_block(&abci::request::EndBlock {
+                height: finalize_block.height.into(),
+            })
+            .await?;
+        let app_hash = self.commit(storage).await;
+
+        Ok(abci::response::FinalizeBlock {
+            events: end_block.events,
+            validator_updates: end_block.validator_updates,
+            consensus_param_updates: end_block.consensus_param_updates,
+            tx_results,
+            app_hash: app_hash
+                .0
+                .to_vec()
+                .try_into()
+                .context("failed to convert app hash")?,
+        })
+    }
+
     #[instrument(name = "App::begin_block", skip_all)]
     pub(crate) async fn begin_block(
         &mut self,
@@ -457,44 +569,37 @@ impl App {
     /// Note that the first two "transactions" in the block, which are the proposer-generated
     /// commitments, are ignored.
     #[instrument(name = "App::deliver_tx_after_proposal", skip_all, fields(
-        tx_hash =  %telemetry::display::hex(&Sha256::digest(&tx.tx)),
+        tx_hash =  %telemetry::display::hex(&Sha256::digest(&tx)),
     ))]
     pub(crate) async fn deliver_tx_after_proposal(
         &mut self,
-        tx: abci::request::DeliverTx,
-    ) -> Option<anyhow::Result<Vec<abci::Event>>> {
+        tx: &bytes::Bytes,
+    ) -> anyhow::Result<Vec<abci::Event>> {
         self.current_sequencer_block_builder
             .as_mut()
             .expect(
                 "begin_block must be called before deliver_tx, thus \
                  current_sequencer_block_builder must be set",
             )
-            .push_transaction(tx.tx.to_vec());
+            .push_transaction(tx.to_vec());
 
         if self.processed_txs < 2 {
             self.processed_txs += 1;
-            return Some(Ok(vec![]));
+            return Ok(vec![]);
         }
 
         // When the hash is not empty, we have already executed and cached the results
         if !self.executed_proposal_hash.is_empty() {
-            let tx_hash: [u8; 32] = sha2::Sha256::digest(&tx.tx).into();
-            return self.execution_result.remove(&tx_hash);
+            let tx_hash: [u8; 32] = sha2::Sha256::digest(&tx).into();
+            return self
+                .execution_result
+                .remove(&tx_hash)
+                .unwrap_or_else(|| Err(anyhow!("transaction not executed during proposal phase")));
         }
 
-        let signed_tx = match signed_transaction_from_bytes(&tx.tx) {
-            Err(e) => {
-                // this is actually a protocol error, as only valid txs should be finalized
-                debug!(
-                    error = AsRef::<dyn std::error::Error>::as_ref(&e),
-                    "failed to decode deliver tx payload to signed transaction; ignoring it",
-                );
-                return None;
-            }
-            Ok(tx) => tx,
-        };
-
-        Some(self.deliver_tx(signed_tx).await)
+        let signed_tx = signed_transaction_from_bytes(&tx)
+            .expect("protocol error; only valid txs should be finalized");
+        self.deliver_tx(signed_tx).await
     }
 
     /// Executes a signed transaction.

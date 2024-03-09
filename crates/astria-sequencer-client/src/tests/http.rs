@@ -13,7 +13,7 @@ use tendermint::{
     Hash,
 };
 use tendermint_rpc::{
-    endpoint::broadcast::tx_commit::v0_37::DialectResponse,
+    endpoint::broadcast::tx_commit::v0_38::DialectResponse,
     response::Wrapper,
     Id,
 };
