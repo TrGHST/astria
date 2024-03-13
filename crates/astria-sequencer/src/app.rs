@@ -134,7 +134,7 @@ pub(crate) struct App {
     /// when the app is fully updated to ABCI++, `begin_block`, `deliver_tx`,
     /// and `end_block` will all become one function `finalize_block`, so
     /// this will not be needed.
-    processed_txs: u32,
+    // processed_txs: u32,
 
     // proposer of the block being currently executed; set in begin_block
     // and cleared in end_block.
@@ -145,6 +145,10 @@ pub(crate) struct App {
     // builder of the current `SequencerBlock`.
     // initialized during `begin_block`, completed and written to state during `end_block`.
     current_sequencer_block_builder: Option<SequencerBlockBuilder>,
+
+    // the current `AppHash` of the application state.
+    // set whenever `commit` is called.
+    app_hash: AppHash,
 }
 
 impl App {
@@ -160,9 +164,10 @@ impl App {
             is_proposer: false,
             executed_proposal_hash: Hash::default(),
             execution_result: HashMap::new(),
-            processed_txs: 0,
+            // processed_txs: 0,
             current_proposer: None,
             current_sequencer_block_builder: None,
+            app_hash: AppHash::default(),
         }
     }
 
@@ -217,7 +222,7 @@ impl App {
 
         // clear the cache of transaction execution results
         self.execution_result.clear();
-        self.processed_txs = 0;
+        // self.processed_txs = 0;
         self.executed_proposal_hash = Hash::default();
     }
 
@@ -436,12 +441,17 @@ impl App {
         let state_tx = StateDelta::new(self.state.clone());
         let mut arc_state_tx = Arc::new(state_tx);
 
+        let data_hash = astria_core::sequencer::v1alpha1::block::merkle_tree_from_data(
+            finalize_block.txs.iter().map(|tx| tx.as_ref()),
+        )
+        .root();
+
         // call begin_block on all components
         let begin_block = abci::request::BeginBlock {
             hash: finalize_block.hash.clone(),
             byzantine_validators: finalize_block.misbehavior.clone(),
             header: Header {
-                app_hash: AppHash::default(), // TODO
+                app_hash: self.app_hash.clone(),
                 chain_id: self
                     .state
                     .get_chain_id()
@@ -450,7 +460,7 @@ impl App {
                     .try_into()
                     .context("invalid chain ID")?,
                 consensus_hash: Hash::default(), // TODO
-                data_hash: Some(Hash::try_from([0u8; 32].to_vec()).unwrap()), // TODO
+                data_hash: Some(Hash::try_from(data_hash.to_vec()).unwrap()),
                 evidence_hash: Some(Hash::default()), // TODO
                 height: finalize_block.height,
                 last_block_id: None,                      // TODO
@@ -479,11 +489,14 @@ impl App {
             .await
             .context("failed to call finalize_block on IbcComponent")?;
 
-        // let state_tx = Arc::try_unwrap(arc_state_tx)
-        //     .expect("components should not retain copies of shared state");
+        ensure!(
+            finalize_block.txs.len() >= 2,
+            "block must contain at least two transactions: the rollup transactions commitment and \
+             rollup IDs commitment"
+        );
 
-        let mut tx_results: Vec<ExecTxResult> = Vec::with_capacity(finalize_block.txs.len());
-        for tx in &finalize_block.txs {
+        let mut tx_results: Vec<ExecTxResult> = Vec::with_capacity(finalize_block.txs.len() - 2);
+        for tx in &finalize_block.txs[2..] {
             match self.deliver_tx_after_proposal(tx).await {
                 Ok(events) => tx_results.push(ExecTxResult {
                     events,
@@ -537,7 +550,7 @@ impl App {
         storage: Storage,
     ) -> anyhow::Result<Vec<abci::Event>> {
         // clear the processed_txs count when beginning block execution
-        self.processed_txs = 0;
+        // self.processed_txs = 0;
         // set the current proposer
         self.current_proposer = Some(begin_block.header.proposer_address);
 
@@ -600,10 +613,10 @@ impl App {
             )
             .push_transaction(tx.to_vec());
 
-        if self.processed_txs < 2 {
-            self.processed_txs += 1;
-            return Ok(vec![]);
-        }
+        // if self.processed_txs < 2 {
+        //     self.processed_txs += 1;
+        //     return Ok(vec![]);
+        // }
 
         // When the hash is not empty, we have already executed and cached the results
         if !self.executed_proposal_hash.is_empty() {
@@ -812,6 +825,11 @@ impl App {
 
         // Get the latest version of the state, now that we've committed it.
         self.state = Arc::new(StateDelta::new(storage.latest_snapshot()));
+        self.app_hash = app_hash
+            .0
+            .to_vec()
+            .try_into()
+            .expect("root hash to app hash must succeed; both are 32 bytes");
 
         app_hash
     }

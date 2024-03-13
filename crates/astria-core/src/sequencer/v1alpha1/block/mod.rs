@@ -881,7 +881,7 @@ impl SequencerBlock {
 /// This hashes each item before pushing it into the Merkle Tree, which
 /// effectively causes a double hashing. The leaf hash of an item `d_i`
 /// is then `MTH(d_i) = SHA256(0x00 || SHA256(d_i))`.
-fn merkle_tree_from_data<I, B>(iter: I) -> merkle::Tree
+pub fn merkle_tree_from_data<I, B>(iter: I) -> merkle::Tree
 where
     I: IntoIterator<Item = B>,
     B: AsRef<[u8]>,
