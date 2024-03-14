@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use astria_core::sequencer::v1alpha1::block::SequencerBlockHeader;
 use astria_eyre::eyre::{
     self,
     bail,
@@ -106,19 +107,19 @@ struct ReconstructedBlocks {
 #[derive(Clone, Debug)]
 pub(crate) struct ReconstructedBlock {
     pub(crate) block_hash: [u8; 32],
-    pub(crate) header: tendermint::block::Header,
+    pub(crate) header: SequencerBlockHeader,
     pub(crate) transactions: Vec<Vec<u8>>,
     pub(crate) celestia_height: u64,
 }
 
 impl ReconstructedBlock {
-    pub(crate) fn sequencer_height(&self) -> SequencerHeight {
-        self.header.height
+    pub(crate) fn sequencer_height(&self) -> u64 {
+        self.header.height()
     }
 }
 
 impl GetSequencerHeight for ReconstructedBlock {
-    fn get_height(&self) -> SequencerHeight {
+    fn get_height(&self) -> u64 {
         self.sequencer_height()
     }
 }
@@ -586,7 +587,7 @@ async fn fetch_blocks_at_celestia_height(
 #[instrument(
     skip_all,
     fields(
-        blob.sequencer_height = sequencer_blob.height().value(),
+        blob.sequencer_height = sequencer_blob.height(),
         blob.block_hash = %hex(&sequencer_blob.block_hash()),
         celestia_rollup_namespace = %hex(rollup_namespace.as_bytes()),
     ),

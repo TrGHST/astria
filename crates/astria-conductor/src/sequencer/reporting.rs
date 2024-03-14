@@ -19,7 +19,7 @@ impl<'a> Serialize for ReportFilteredSequencerBlock<'a> {
         S: serde::Serializer,
     {
         let mut state = serializer.serialize_struct("FilteredSequencerBlockInfo", 2)?;
-        state.serialize_field("sequencer_height", &self.0.height().value())?;
+        state.serialize_field("sequencer_height", &self.0.height())?;
         state.serialize_field("rollups", &ReportRollups(self.0.rollup_transactions()))?;
         state.end()
     }

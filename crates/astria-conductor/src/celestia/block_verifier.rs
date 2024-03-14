@@ -50,19 +50,14 @@ struct Verify {
 }
 
 impl Verify {
-    async fn at_height(
-        client: HttpClient,
-        height: tendermint::block::Height,
-    ) -> eyre::Result<Self> {
+    async fn at_height(client: HttpClient, height: u64) -> eyre::Result<Self> {
         use futures::TryFutureExt as _;
-        ensure!(
-            height != tendermint::block::Height::from(0u32),
-            "cannot validate sequencer blocks at height 0",
-        );
+
+        let height: u32 = height.try_into().wrap_err("height exceeds u32::MAX")?;
+        ensure!(height != 0, "cannot validate sequencer blocks at height 0",);
+
         // the validators at height h-1 vote for the block at height h.
-        let prev_height: tendermint::block::Height = (height.value() - 1).try_into().wrap_err(
-            "failed converting decremented height tendermint value to tendermint height type",
-        )?;
+        let prev_height = height - 1; // unchecked is ok because we check that height is nonzero above
         let (block, commit, validator_set) = tokio::try_join!(
             client
                 .block(height)
@@ -102,7 +97,7 @@ impl Verify {
 
     fn verify(&self, blob: &CelestiaSequencerBlob) -> eyre::Result<()> {
         ensure!(
-            &self.commit_header.header.chain_id == blob.cometbft_chain_id(),
+            self.commit_header.header.chain_id.as_str() == blob.cometbft_chain_id(),
             "expected cometbft chain ID `{}`, got {}",
             self.commit_header.header.chain_id,
             blob.cometbft_chain_id(),

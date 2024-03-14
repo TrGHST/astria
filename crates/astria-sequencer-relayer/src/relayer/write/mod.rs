@@ -75,7 +75,7 @@ struct QueuedConvertedBlocks {
     max_blobs: usize,
     blobs: Vec<Blob>,
     infos: Vec<ConversionInfo>,
-    greatest_sequencer_height: Option<SequencerHeight>,
+    greatest_sequencer_height: Option<u64>,
 }
 
 impl QueuedConvertedBlocks {
@@ -326,9 +326,11 @@ async fn submit_blobs(
     );
 
     let submission_started = match crate::utils::flatten(
-        tokio::task::spawn_blocking(move || submission_state.initialize(largest_height))
-            .in_current_span()
-            .await,
+        tokio::task::spawn_blocking(move || {
+            submission_state.initialize(largest_height.try_into().expect("can convert height"))
+        })
+        .in_current_span()
+        .await,
     ) {
         Err(error) => {
             error!(%error, "failed to initialize submission; abandoning");
@@ -488,7 +490,7 @@ async fn fetch_latest_celestia_height(
 /// blocks in the order of their heights to Celestia.
 struct Conversions {
     // The currently active conversions.
-    active: FuturesOrdered<BoxFuture<'static, (SequencerHeight, eyre::Result<Converted>)>>,
+    active: FuturesOrdered<BoxFuture<'static, (u64, eyre::Result<Converted>)>>,
 
     // The maximum number of conversions that can be active at the same time.
     max_conversions: usize,
@@ -517,7 +519,7 @@ impl Conversions {
         self.active.push_back(fut);
     }
 
-    async fn next(&mut self) -> Option<(SequencerHeight, eyre::Result<Converted>)> {
+    async fn next(&mut self) -> Option<(u64, eyre::Result<Converted>)> {
         use tokio_stream::StreamExt as _;
         self.active.next().await
     }

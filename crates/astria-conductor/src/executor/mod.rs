@@ -310,7 +310,7 @@ impl Executor {
 
     #[instrument(skip_all, fields(
         block.hash = %telemetry::display::hex(&block.block_hash()),
-        block.height = block.height().value(),
+        block.height = block.height(),
     ))]
     async fn execute_soft(
         &mut self,
@@ -321,7 +321,7 @@ impl Executor {
         let executable_block =
             ExecutableBlock::from_sequencer(block, self.state.borrow().rollup_id());
 
-        let expected_height = self.state.borrow().next_soft_sequencer_height();
+        let expected_height = self.state.borrow().next_soft_sequencer_height().value();
         match executable_block.height.cmp(&expected_height) {
             std::cmp::Ordering::Less => {
                 info!(
@@ -365,7 +365,7 @@ impl Executor {
 
     #[instrument(skip_all, fields(
         block.hash = %telemetry::display::hex(&block.block_hash),
-        block.height = block.sequencer_height().value(),
+        block.height = block.sequencer_height(),
     ))]
     async fn execute_firm(
         &mut self,
@@ -373,7 +373,7 @@ impl Executor {
         block: ReconstructedBlock,
     ) -> eyre::Result<()> {
         let executable_block = ExecutableBlock::from_reconstructed(block);
-        let expected_height = self.state.borrow().next_firm_sequencer_height();
+        let expected_height = self.state.borrow().next_firm_sequencer_height().value();
         ensure!(
             executable_block.height == expected_height,
             "expected block at sequencer height {expected_height}, but got {}",
@@ -411,7 +411,7 @@ impl Executor {
     /// and should not be called directly.
     #[instrument(skip_all, fields(
         block.hash = %telemetry::display::hex(&block.hash),
-        block.height = block.height.value(),
+        block.height = block.height,
         block.num_of_transactions = block.transactions.len(),
         rollup.parent_hash = %telemetry::display::hex(&parent_block_hash),
     ))]
@@ -519,7 +519,7 @@ enum Update {
 #[derive(Debug)]
 struct ExecutableBlock {
     hash: [u8; 32],
-    height: SequencerHeight,
+    height: u64,
     timestamp: prost_types::Timestamp,
     transactions: Vec<Vec<u8>>,
 }
@@ -532,11 +532,10 @@ impl ExecutableBlock {
             transactions,
             ..
         } = block;
-        let timestamp = convert_tendermint_to_prost_timestamp(header.time);
         Self {
             hash: block_hash,
-            height: header.height,
-            timestamp,
+            height: header.height(),
+            timestamp: convert_tendermint_to_prost_timestamp(header.time()),
             transactions,
         }
     }
@@ -544,7 +543,7 @@ impl ExecutableBlock {
     fn from_sequencer(block: FilteredSequencerBlock, id: RollupId) -> Self {
         let hash = block.block_hash();
         let height = block.height();
-        let timestamp = convert_tendermint_to_prost_timestamp(block.cometbft_header().time);
+        let timestamp = convert_tendermint_to_prost_timestamp(block.header().time());
         let FilteredSequencerBlockParts {
             mut rollup_transactions,
             ..
