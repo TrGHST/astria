@@ -762,8 +762,6 @@ impl SequencerBlock {
         data: Vec<Vec<u8>>,
         deposits: HashMap<RollupId, Vec<Deposit>>,
     ) -> Result<Self, SequencerBlockError> {
-        use prost::Message as _;
-
         let Some(tendermint::Hash::Sha256(data_hash)) = cometbft_header.data_hash else {
             // header.data_hash is Option<Hash> and Hash itself has
             // variants Sha256([u8; 32]) or None.
@@ -778,6 +776,134 @@ impl SequencerBlock {
         if tree.root() != data_hash {
             return Err(SequencerBlockError::comet_bft_data_hash_does_not_match_reconstructed());
         }
+
+        Self::try_from_block_info_and_data(
+            block_hash,
+            cometbft_header.chain_id,
+            cometbft_header.height,
+            cometbft_header.time,
+            cometbft_header.proposer_address,
+            data,
+            deposits,
+        )
+
+        // let mut data_list = data.into_iter();
+        // let rollup_transactions_root: [u8; 32] = data_list
+        //     .next()
+        //     .ok_or(SequencerBlockError::no_rollup_transactions_root())?
+        //     .try_into()
+        //     .map_err(|e: Vec<_>| {
+        //         SequencerBlockError::incorrect_rollup_transactions_root_length(e.len())
+        //     })?;
+
+        // let rollup_ids_root: [u8; 32] = data_list
+        //     .next()
+        //     .ok_or(SequencerBlockError::no_rollup_ids_root())?
+        //     .try_into()
+        //     .map_err(|e: Vec<_>|
+        // SequencerBlockError::incorrect_rollup_ids_root_length(e.len()))?;
+
+        // let mut rollup_datas = IndexMap::new();
+        // for elem in data_list {
+        //     let raw_tx = raw::SignedTransaction::decode(&*elem)
+        //         .map_err(SequencerBlockError::signed_transaction_protobuf_decode)?;
+        //     let signed_tx = SignedTransaction::try_from_raw(raw_tx)
+        //         .map_err(SequencerBlockError::raw_signed_transaction_conversion)?;
+        //     for action in signed_tx.into_unsigned().actions {
+        //         if let action::Action::Sequence(action::SequenceAction {
+        //             rollup_id,
+        //             data,
+        //             fee_asset_id: _,
+        //         }) = action
+        //         {
+        //             let elem = rollup_datas.entry(rollup_id).or_insert(vec![]);
+        //             let data = RollupData::SequencedData(data).into_raw().encode_to_vec();
+        //             elem.push(data);
+        //         }
+        //     }
+        // }
+        // for (id, deposits) in deposits {
+        //     rollup_datas.entry(id).or_default().extend(
+        //         deposits
+        //             .into_iter()
+        //             .map(|deposit| RollupData::Deposit(deposit).into_raw().encode_to_vec()),
+        //     );
+        // }
+
+        // // XXX: The rollup data must be sorted by its keys before constructing the merkle tree.
+        // // Since it's constructed from non-deterministically ordered sources, there is otherwise
+        // no // guarantee that the same data will give the root.
+        // rollup_datas.sort_unstable_keys();
+
+        // // ensure the rollup IDs commitment matches the one calculated from the rollup data
+        // if rollup_ids_root != merkle::Tree::from_leaves(rollup_datas.keys()).root() {
+        //     return Err(SequencerBlockError::rollup_ids_root_does_not_match_reconstructed());
+        // }
+
+        // let rollup_transaction_tree = derive_merkle_tree_from_rollup_txs(&rollup_datas);
+        // if rollup_transactions_root != rollup_transaction_tree.root() {
+        //     return Err(
+        //         SequencerBlockError::rollup_transactions_root_does_not_match_reconstructed(),
+        //     );
+        // }
+
+        // let mut rollup_transactions = IndexMap::new();
+        // for (i, (id, data)) in rollup_datas.into_iter().enumerate() {
+        //     let proof = rollup_transaction_tree
+        //         .construct_proof(i)
+        //         .expect("the proof must exist because the tree was derived with the same leaf");
+        //     rollup_transactions.insert(
+        //         id,
+        //         RollupTransactions {
+        //             id,
+        //             transactions: data, // TODO: rename this field?
+        //             proof,
+        //         },
+        //     );
+        // }
+        // rollup_transactions.sort_unstable_keys();
+
+        // // action tree root is always the first tx in a block
+        // let rollup_transactions_proof = tree.construct_proof(0).expect(
+        //     "the tree has at least one leaf; if this line is reached and `construct_proof` \
+        //      returns None it means that the short circuiting checks above it have been removed",
+        // );
+
+        // let rollup_ids_proof = tree.construct_proof(1).expect(
+        //     "the tree has at least two leaves; if this line is reached and `construct_proof` \
+        //      returns None it means that the short circuiting checks above it have been removed",
+        // );
+
+        // Ok(Self {
+        //     block_hash,
+        //     header: SequencerBlockHeader {
+        //         chain_id: cometbft_header.chain_id,
+        //         height: cometbft_header.height,
+        //         time: cometbft_header.time,
+        //         rollup_transactions_root,
+        //         rollup_ids_root,
+        //         data_hash,
+        //         proposer_address: cometbft_header.proposer_address,
+        //     },
+        //     rollup_transactions,
+        //     rollup_transactions_proof,
+        //     rollup_ids_proof,
+        // })
+    }
+
+    pub fn try_from_block_info_and_data(
+        block_hash: [u8; 32],
+        chain_id: tendermint::chain::Id,
+        height: tendermint::block::Height,
+        time: Time,
+        proposer_address: account::Id,
+        data: Vec<Vec<u8>>,
+        deposits: HashMap<RollupId, Vec<Deposit>>,
+    ) -> Result<Self, SequencerBlockError> {
+        use prost::Message as _;
+
+        let tree = merkle_tree_from_data(&data);
+        let data_hash = tree.root();
 
         let mut data_list = data.into_iter();
         let rollup_transactions_root: [u8; 32] = data_list
@@ -868,13 +994,13 @@ impl SequencerBlock {
         Ok(Self {
             block_hash,
             header: SequencerBlockHeader {
-                chain_id: cometbft_header.chain_id,
-                height: cometbft_header.height,
-                time: cometbft_header.time,
+                chain_id,
+                height,
+                time,
                 rollup_transactions_root,
                 rollup_ids_root,
                 data_hash,
-                proposer_address: cometbft_header.proposer_address,
+                proposer_address,
             },
             rollup_transactions,
             rollup_transactions_proof,

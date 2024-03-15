@@ -57,6 +57,7 @@ use crate::{
             StateWriteExt as _,
         },
     },
+    api_state_ext::StateWriteExt as _,
     authority::{
         component::{
             AuthorityComponent,
@@ -126,25 +127,11 @@ pub(crate) struct App {
     // cleared at the end of each block.
     execution_result: HashMap<[u8; 32], anyhow::Result<Vec<abci::Event>>>,
 
-    /// set to `0` when `begin_block` is called, and set to `1` or `2` when
-    /// `deliver_tx` is called for the first two times.
-    /// this is a hack to allow the `sequence_actions_commitment` and `chain_ids_commitment`
-    /// to pass `deliver_tx`, as they're the first two "tx"s delivered.
-    ///
-    /// when the app is fully updated to ABCI++, `begin_block`, `deliver_tx`,
-    /// and `end_block` will all become one function `finalize_block`, so
-    /// this will not be needed.
-    // processed_txs: u32,
-
     // proposer of the block being currently executed; set in begin_block
     // and cleared in end_block.
     // this is used only to determine who to transfer the block fees to
     // at the end of the block.
     current_proposer: Option<account::Id>,
-
-    // builder of the current `SequencerBlock`.
-    // initialized during `begin_block`, completed and written to state during `end_block`.
-    current_sequencer_block_builder: Option<SequencerBlockBuilder>,
 
     // the current `AppHash` of the application state.
     // set whenever `commit` is called.
@@ -164,9 +151,7 @@ impl App {
             is_proposer: false,
             executed_proposal_hash: Hash::default(),
             execution_result: HashMap::new(),
-            // processed_txs: 0,
             current_proposer: None,
-            current_sequencer_block_builder: None,
             app_hash: AppHash::default(),
         }
     }
@@ -427,7 +412,7 @@ impl App {
     #[instrument(name = "App::finalize_block", skip_all)]
     pub(crate) async fn finalize_block(
         &mut self,
-        finalize_block: &abci::request::FinalizeBlock,
+        finalize_block: abci::request::FinalizeBlock,
         storage: Storage,
     ) -> anyhow::Result<abci::response::FinalizeBlock> {
         use astria_core::sequencer::v1alpha1::AbciErrorCode;
@@ -446,19 +431,21 @@ impl App {
         )
         .root();
 
+        let chain_id: tendermint::chain::Id = self
+            .state
+            .get_chain_id()
+            .await
+            .context("failed to get chain ID from state")?
+            .try_into()
+            .context("invalid chain ID")?;
+
         // call begin_block on all components
         let begin_block = abci::request::BeginBlock {
             hash: finalize_block.hash.clone(),
             byzantine_validators: finalize_block.misbehavior.clone(),
             header: Header {
                 app_hash: self.app_hash.clone(),
-                chain_id: self
-                    .state
-                    .get_chain_id()
-                    .await
-                    .context("failed to get chain ID from state")?
-                    .try_into()
-                    .context("invalid chain ID")?,
+                chain_id: chain_id.clone(),
                 consensus_hash: Hash::default(), // TODO
                 data_hash: Some(Hash::try_from(data_hash.to_vec()).unwrap()),
                 evidence_hash: Some(Hash::default()), // TODO
@@ -488,6 +475,9 @@ impl App {
         IbcComponent::begin_block(&mut arc_state_tx, &begin_block)
             .await
             .context("failed to call finalize_block on IbcComponent")?;
+
+        let mut state_tx = Arc::try_unwrap(arc_state_tx)
+            .expect("components should not retain copies of shared state");
 
         ensure!(
             finalize_block.txs.len() >= 2,
@@ -528,6 +518,42 @@ impl App {
                 height: finalize_block.height.into(),
             })
             .await?;
+
+        // get and clear block deposits from state
+        let deposits = self
+            .state
+            .get_block_deposits()
+            .await
+            .context("failed to get block deposits in end_block")?;
+        state_tx
+            .clear_block_deposits()
+            .await
+            .context("failed to clear block deposits")?;
+
+        let sequencer_block = SequencerBlock::try_from_block_info_and_data(
+            // this conversion should never fail
+            finalize_block
+                .hash
+                .as_ref()
+                .to_vec()
+                .try_into()
+                .map_err(|_| {
+                    anyhow!("failed to convert block hash into 32-byte vec; this should not occur")
+                })?,
+            chain_id,
+            finalize_block.height,
+            finalize_block.time,
+            finalize_block.proposer_address,
+            finalize_block.txs.into_iter().map(|tx| tx.into()).collect(),
+            deposits,
+        )
+        .context("failed to convert block info and data to SequencerBlock")?;
+        state_tx
+            .put_sequencer_block(sequencer_block)
+            .context("failed to write sequencer block to state")?;
+
+        // TODO: finalize_block forces us to return the app hash, but we can't get it
+        // without committing; cnidarium is the limitation here
         let app_hash = self.commit(storage).await;
 
         Ok(abci::response::FinalizeBlock {
@@ -549,13 +575,8 @@ impl App {
         begin_block: &abci::request::BeginBlock,
         storage: Storage,
     ) -> anyhow::Result<Vec<abci::Event>> {
-        // clear the processed_txs count when beginning block execution
-        // self.processed_txs = 0;
         // set the current proposer
         self.current_proposer = Some(begin_block.header.proposer_address);
-
-        self.current_sequencer_block_builder =
-            Some(SequencerBlockBuilder::new(begin_block.header.clone()));
 
         // If we previously executed txs in a different proposal than is being processed reset
         // cached state changes.
@@ -605,19 +626,6 @@ impl App {
         &mut self,
         tx: &bytes::Bytes,
     ) -> anyhow::Result<Vec<abci::Event>> {
-        self.current_sequencer_block_builder
-            .as_mut()
-            .expect(
-                "begin_block must be called before deliver_tx, thus \
-                 current_sequencer_block_builder must be set",
-            )
-            .push_transaction(tx.to_vec());
-
-        // if self.processed_txs < 2 {
-        //     self.processed_txs += 1;
-        //     return Ok(vec![]);
-        // }
-
         // When the hash is not empty, we have already executed and cached the results
         if !self.executed_proposal_hash.is_empty() {
             let tx_hash: [u8; 32] = sha2::Sha256::digest(&tx).into();
@@ -691,8 +699,6 @@ impl App {
         &mut self,
         end_block: &abci::request::EndBlock,
     ) -> anyhow::Result<abci::response::EndBlock> {
-        use crate::api_state_ext::StateWriteExt as _;
-
         let state_tx = StateDelta::new(self.state.clone());
         let mut arc_state_tx = Arc::new(state_tx);
 
@@ -751,37 +757,37 @@ impl App {
         state_tx.clear_block_fees().await;
         self.current_proposer = None;
 
-        // get and clear block deposits from state
-        let deposits = self
-            .state
-            .get_block_deposits()
-            .await
-            .context("failed to get block deposits in end_block")?;
-        self.current_sequencer_block_builder
-            .as_mut()
-            .expect(
-                "begin_block must be called before end_block, thus \
-                 current_sequencer_block_builder must be set",
-            )
-            .deposits(deposits);
-        state_tx
-            .clear_block_deposits()
-            .await
-            .context("failed to clear block deposits")?;
+        // // get and clear block deposits from state
+        // let deposits = self
+        //     .state
+        //     .get_block_deposits()
+        //     .await
+        //     .context("failed to get block deposits in end_block")?;
+        // // self.current_sequencer_block_builder
+        // //     .as_mut()
+        // //     .expect(
+        // //         "begin_block must be called before end_block, thus \
+        // //          current_sequencer_block_builder must be set",
+        // //     )
+        // //     .deposits(deposits);
+        // state_tx
+        //     .clear_block_deposits()
+        //     .await
+        //     .context("failed to clear block deposits")?;
 
-        // store the `SequencerBlock` in the state
-        let sequencer_block = self
-            .current_sequencer_block_builder
-            .take()
-            .expect(
-                "begin_block must be called before end_block, thus \
-                 current_sequencer_block_builder must be set",
-            )
-            .build()
-            .context("failed to build sequencer block")?;
-        state_tx
-            .put_sequencer_block(sequencer_block)
-            .context("failed to write sequencer block to state")?;
+        // // // store the `SequencerBlock` in the state
+        // // let sequencer_block = self
+        // //     .current_sequencer_block_builder
+        // //     .take()
+        // //     .expect(
+        // //         "begin_block must be called before end_block, thus \
+        // //          current_sequencer_block_builder must be set",
+        // //     )
+        // //     .build()
+        // //     .context("failed to build sequencer block")?;
+        // state_tx
+        //     .put_sequencer_block(sequencer_block)
+        //     .context("failed to write sequencer block to state")?;
 
         let events = self.apply(state_tx);
 
@@ -853,36 +859,6 @@ impl App {
         );
 
         events
-    }
-}
-
-#[derive(Debug)]
-struct SequencerBlockBuilder {
-    header: tendermint::block::Header,
-    data: Vec<Vec<u8>>,
-    deposits: HashMap<RollupId, Vec<Deposit>>,
-}
-
-impl SequencerBlockBuilder {
-    fn new(header: tendermint::block::Header) -> Self {
-        Self {
-            header,
-            data: Vec::new(),
-            deposits: HashMap::new(),
-        }
-    }
-
-    fn push_transaction(&mut self, tx: Vec<u8>) {
-        self.data.push(tx);
-    }
-
-    fn deposits(&mut self, deposits: HashMap<RollupId, Vec<Deposit>>) {
-        self.deposits = deposits;
-    }
-
-    fn build(self) -> anyhow::Result<SequencerBlock> {
-        SequencerBlock::try_from_cometbft_header_and_data(self.header, self.data, self.deposits)
-            .map_err(Into::into)
     }
 }
 
@@ -1965,8 +1941,8 @@ mod test {
             .unwrap();
         app.apply(state_tx);
 
-        let (_, sequencer_block_builder) = block_data_from_txs_no_sequence_actions(vec![]);
-        app.current_sequencer_block_builder = Some(sequencer_block_builder);
+        // let (_, sequencer_block_builder) = block_data_from_txs_no_sequence_actions(vec![]);
+        // app.current_sequencer_block_builder = Some(sequencer_block_builder);
 
         let resp = app
             .end_block(&abci::request::EndBlock {
@@ -2108,46 +2084,62 @@ mod test {
         };
 
         let signed_tx = tx.into_signed(&alice_signing_key);
-        let (header, sequencer_block_builder) =
-            block_data_from_txs_no_sequence_actions(vec![signed_tx.to_raw().encode_to_vec()]);
+        // let (header, sequencer_block_builder) =
+        //     block_data_from_txs_no_sequence_actions(vec![signed_tx.to_raw().encode_to_vec()]);
 
-        let mut begin_block = abci::request::BeginBlock {
-            header,
+        // let mut begin_block = abci::request::BeginBlock {
+        //     header,
+        //     hash: Hash::default(),
+        //     last_commit_info: CommitInfo {
+        //         votes: vec![],
+        //         round: Round::default(),
+        //     },
+        //     byzantine_validators: vec![],
+        // };
+        // begin_block.header.height = 1u8.into();
+        let proposer_address: tendermint::account::Id = [99u8; 20].to_vec().try_into().unwrap();
+        let sequencer_proposer_address =
+            Address::try_from_slice(proposer_address.as_bytes()).unwrap();
+
+        // app.begin_block(&begin_block, storage).await.unwrap();
+        // assert_eq!(app.state.get_block_height().await.unwrap(), 1);
+        // assert_eq!(
+        //     app.state.get_block_timestamp().await.unwrap(),
+        //     begin_block.header.time
+        // );
+        // assert_eq!(
+        //     app.current_proposer.unwrap(),
+        //     begin_block.header.proposer_address
+        // );
+
+        // app.deliver_tx(signed_tx).await.unwrap();
+
+        // app.current_sequencer_block_builder = Some(sequencer_block_builder);
+        // app.end_block(&abci::request::EndBlock {
+        //     height: 1u32.into(),
+        // })
+        // .await
+        // .unwrap();
+
+        let finalize_block = abci::request::FinalizeBlock {
             hash: Hash::default(),
-            last_commit_info: CommitInfo {
+            height: 1u32.into(),
+            time: Time::now(),
+            next_validators_hash: Hash::default(),
+            proposer_address,
+            txs: vec![signed_tx.to_raw().encode_to_vec().into()],
+            decided_last_commit: CommitInfo {
                 votes: vec![],
                 round: Round::default(),
             },
-            byzantine_validators: vec![],
+            misbehavior: vec![],
         };
-        begin_block.header.height = 1u8.into();
-        let proposer_address =
-            Address::try_from_slice(begin_block.header.proposer_address.as_bytes()).unwrap();
-
-        app.begin_block(&begin_block, storage).await.unwrap();
-        assert_eq!(app.state.get_block_height().await.unwrap(), 1);
-        assert_eq!(
-            app.state.get_block_timestamp().await.unwrap(),
-            begin_block.header.time
-        );
-        assert_eq!(
-            app.current_proposer.unwrap(),
-            begin_block.header.proposer_address
-        );
-
-        app.deliver_tx(signed_tx).await.unwrap();
-
-        app.current_sequencer_block_builder = Some(sequencer_block_builder);
-        app.end_block(&abci::request::EndBlock {
-            height: 1u32.into(),
-        })
-        .await
-        .unwrap();
+        app.finalize_block(finalize_block, storage).await.unwrap();
 
         // assert that transaction fees were transferred to the block proposer
         assert_eq!(
             app.state
-                .get_account_balance(proposer_address, native_asset)
+                .get_account_balance(sequencer_proposer_address, native_asset)
                 .await
                 .unwrap(),
             TRANSFER_FEE,
@@ -2157,10 +2149,18 @@ mod test {
 
     #[tokio::test]
     async fn app_create_sequencer_block_with_sequenced_data_and_deposits() {
-        use astria_core::sequencer::v1alpha1::{
-            block::Deposit,
-            transaction::action::BridgeLockAction,
+        use astria_core::{
+            generated::sequencer::v1alpha1::RollupData as RawRollupData,
+            sequencer::v1alpha1::{
+                block::{
+                    Deposit,
+                    RollupData,
+                },
+                transaction::action::BridgeLockAction,
+            },
         };
+
+        use crate::api_state_ext::StateReadExt as _;
 
         let (alice_signing_key, _) = get_alice_signing_key_and_address();
         let (mut app, storage) = initialize_app_with_storage(None, vec![]).await;
@@ -2205,99 +2205,109 @@ mod test {
         );
         let deposits = HashMap::from_iter(vec![(rollup_id, vec![expected_deposit.clone()])]);
 
-        let (header, commitments) =
-            block_data_from_txs_with_sequence_actions_and_deposits(&[signed_tx.clone()], deposits);
+        // let (header, commitments) =
+        //     block_data_from_txs_with_sequence_actions_and_deposits(&[signed_tx.clone()],
+        // deposits);
 
-        let begin_block = abci::request::BeginBlock {
-            header,
+        let commitments = generate_rollup_datas_commitment(&[signed_tx.clone()], deposits.clone());
+
+        let finalize_block = abci::request::FinalizeBlock {
             hash: Hash::default(),
-            last_commit_info: CommitInfo {
+            height: 1u32.into(),
+            time: Time::now(),
+            next_validators_hash: Hash::default(),
+            proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
+            txs: commitments.into_transactions(vec![signed_tx.to_raw().encode_to_vec().into()]),
+            decided_last_commit: CommitInfo {
                 votes: vec![],
                 round: Round::default(),
             },
-            byzantine_validators: vec![],
+            misbehavior: vec![],
         };
-        app.begin_block(&begin_block, storage).await.unwrap();
+        app.finalize_block(finalize_block, storage).await.unwrap();
 
-        // deliver the commitments and the signed tx to simulate the
-        // action block execution and put them in the `app.current_sequencer_block_builder`
-        app.deliver_tx_after_proposal(abci::request::DeliverTx {
-            tx: commitments.rollup_datas_root.to_vec().into(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        app.deliver_tx_after_proposal(abci::request::DeliverTx {
-            tx: commitments.rollup_ids_root.to_vec().into(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        app.deliver_tx_after_proposal(abci::request::DeliverTx {
-            tx: signed_tx.to_raw().encode_to_vec().into(),
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        let deposits = app.state.get_deposit_events(&rollup_id).await.unwrap();
-        assert_eq!(deposits.len(), 1);
-        assert_eq!(deposits[0], expected_deposit);
+        // // deliver the commitments and the signed tx to simulate the
+        // // action block execution and put them in the `app.current_sequencer_block_builder`
+        // app.deliver_tx_after_proposal(&commitments.rollup_datas_root.to_vec().into())
+        //     .await
+        //     .unwrap();
+        // app.deliver_tx_after_proposal(&commitments.rollup_ids_root.to_vec().into())
+        //     .await
+        //     .unwrap();
+        // app.deliver_tx_after_proposal(&signed_tx.to_raw().encode_to_vec().into())
+        //     .await
+        //     .unwrap();
 
-        app.end_block(&abci::request::EndBlock {
-            height: 1u32.into(),
-        })
-        .await
-        .unwrap();
+        // app.end_block(&abci::request::EndBlock {
+        //     height: 1u32.into(),
+        // })
+        // .await
+        // .unwrap();
 
         // ensure deposits are cleared at the end of the block
         let deposit_events = app.state.get_deposit_events(&rollup_id).await.unwrap();
         assert_eq!(deposit_events.len(), 0);
-    }
 
-    fn block_data_from_txs_no_sequence_actions(
-        txs: Vec<Vec<u8>>,
-    ) -> (Header, SequencerBlockBuilder) {
-        let empty_hash = merkle::Tree::from_leaves(Vec::<Vec<u8>>::new()).root();
-        let mut block_data = vec![empty_hash.to_vec(), empty_hash.to_vec()];
-        block_data.extend(txs);
-
-        let data_hash = merkle::Tree::from_leaves(block_data.iter().map(Sha256::digest)).root();
-        let mut header = default_header();
-        header.data_hash = Some(Hash::try_from(data_hash.to_vec()).unwrap());
-
-        let mut sequencer_block_builder = SequencerBlockBuilder::new(header.clone());
-        for tx in block_data {
-            sequencer_block_builder.push_transaction(tx);
+        let block = app.state.get_sequencer_block_by_height(1).await.unwrap();
+        let mut deposits = vec![];
+        for (_, rollup_data) in block.rollup_transactions() {
+            for tx in rollup_data.transactions() {
+                let rollup_data =
+                    RollupData::try_from_raw(RawRollupData::decode(tx.as_slice()).unwrap())
+                        .unwrap();
+                if let RollupData::Deposit(deposit) = rollup_data {
+                    deposits.push(deposit);
+                }
+            }
         }
-        (header, sequencer_block_builder)
+        assert_eq!(deposits.len(), 1);
+        assert_eq!(deposits[0], expected_deposit);
     }
 
-    fn block_data_from_txs_with_sequence_actions_and_deposits(
-        txs: &[SignedTransaction],
-        deposits: HashMap<RollupId, Vec<Deposit>>,
-    ) -> (Header, GeneratedCommitments) {
-        let GeneratedCommitments {
-            rollup_datas_root,
-            rollup_ids_root,
-        } = generate_rollup_datas_commitment(txs, deposits.clone());
-        let mut block_data = vec![rollup_datas_root.to_vec(), rollup_ids_root.to_vec()];
-        block_data.extend(txs.iter().map(|tx| tx.to_raw().encode_to_vec()));
+    // fn block_data_from_txs_no_sequence_actions(
+    //     txs: Vec<Vec<u8>>,
+    // ) -> (Header, SequencerBlockBuilder) {
+    //     let empty_hash = merkle::Tree::from_leaves(Vec::<Vec<u8>>::new()).root();
+    //     let mut block_data = vec![empty_hash.to_vec(), empty_hash.to_vec()];
+    //     block_data.extend(txs);
 
-        let data_hash = merkle::Tree::from_leaves(block_data.iter().map(Sha256::digest)).root();
-        let mut header = default_header();
-        header.data_hash = Some(Hash::try_from(data_hash.to_vec()).unwrap());
+    //     let data_hash = merkle::Tree::from_leaves(block_data.iter().map(Sha256::digest)).root();
+    //     let mut header = default_header();
+    //     header.data_hash = Some(Hash::try_from(data_hash.to_vec()).unwrap());
 
-        let mut sequencer_block_builder = SequencerBlockBuilder::new(header.clone());
-        for tx in block_data {
-            sequencer_block_builder.push_transaction(tx);
-        }
-        sequencer_block_builder.deposits = deposits;
-        (
-            header,
-            GeneratedCommitments {
-                rollup_datas_root,
-                rollup_ids_root,
-            },
-        )
-    }
+    //     let mut sequencer_block_builder = SequencerBlockBuilder::new(header.clone());
+    //     for tx in block_data {
+    //         sequencer_block_builder.push_transaction(tx);
+    //     }
+    //     (header, sequencer_block_builder)
+    // }
+
+    // fn block_data_from_txs_with_sequence_actions_and_deposits(
+    //     txs: &[SignedTransaction],
+    //     deposits: HashMap<RollupId, Vec<Deposit>>,
+    // ) -> (Header, GeneratedCommitments) {
+    //     let GeneratedCommitments {
+    //         rollup_datas_root,
+    //         rollup_ids_root,
+    //     } = generate_rollup_datas_commitment(txs, deposits.clone());
+    //     let mut block_data = vec![rollup_datas_root.to_vec(), rollup_ids_root.to_vec()];
+    //     block_data.extend(txs.iter().map(|tx| tx.to_raw().encode_to_vec()));
+
+    //     let data_hash = merkle::Tree::from_leaves(block_data.iter().map(Sha256::digest)).root();
+    //     let mut header = default_header();
+    //     header.data_hash = Some(Hash::try_from(data_hash.to_vec()).unwrap());
+
+    //     let mut sequencer_block_builder = SequencerBlockBuilder::new(header.clone());
+    //     for tx in block_data {
+    //         sequencer_block_builder.push_transaction(tx);
+    //     }
+    //     sequencer_block_builder.deposits = deposits;
+    //     (
+    //         header,
+    //         GeneratedCommitments {
+    //             rollup_datas_root,
+    //             rollup_ids_root,
+    //         },
+    //     )
+    // }
 }

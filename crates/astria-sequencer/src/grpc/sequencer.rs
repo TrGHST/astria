@@ -222,15 +222,6 @@ mod test {
         };
         let request = Request::new(request);
         let response = server.get_sequencer_block(request).await.unwrap();
-        assert_eq!(
-            response
-                .into_inner()
-                .header
-                .unwrap()
-                .cometbft_header
-                .unwrap()
-                .height,
-            1
-        );
+        assert_eq!(response.into_inner().header.unwrap().height, 1);
     }
 }

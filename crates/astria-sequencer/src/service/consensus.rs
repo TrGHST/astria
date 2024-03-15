@@ -203,7 +203,7 @@ impl Consensus {
     ) -> anyhow::Result<response::FinalizeBlock> {
         let finalize_block = self
             .app
-            .finalize_block(&finalize_block, self.storage.clone())
+            .finalize_block(finalize_block, self.storage.clone())
             .await
             .context("failed to call App::finalize_block")?;
         Ok(finalize_block)
@@ -540,6 +540,8 @@ mod test {
 
     #[tokio::test]
     async fn block_lifecycle() {
+        use sha2::Digest as _;
+
         let signing_key = SigningKey::new(OsRng);
         let mut consensus_service =
             new_consensus_service(Some(signing_key.verification_key())).await;
@@ -551,7 +553,8 @@ mod test {
         let res = generate_rollup_datas_commitment(&vec![signed_tx], HashMap::new());
 
         let block_data = res.into_transactions(txs.clone());
-        let data_hash = merkle::Tree::from_leaves(block_data.iter().map(Sha256::digest)).root();
+        let data_hash =
+            merkle::Tree::from_leaves(block_data.iter().map(sha2::Sha256::digest)).root();
         let mut header = default_header();
         header.data_hash = Some(Hash::try_from(data_hash.to_vec()).unwrap());
 
@@ -561,40 +564,44 @@ mod test {
             .await
             .unwrap();
 
-        let begin_block = request::BeginBlock {
+        let begin_block = request::FinalizeBlock {
             hash: Hash::default(),
-            header,
-            last_commit_info: tendermint::abci::types::CommitInfo {
+            height: 1u32.into(),
+            time: Time::now(),
+            next_validators_hash: Hash::default(),
+            proposer_address: [0u8; 20].to_vec().try_into().unwrap(),
+            decided_last_commit: tendermint::abci::types::CommitInfo {
                 round: 0u16.into(),
                 votes: vec![],
             },
-            byzantine_validators: vec![],
+            misbehavior: vec![],
+            txs: block_data,
         };
         consensus_service
-            .handle_request(ConsensusRequest::BeginBlock(begin_block))
+            .handle_request(ConsensusRequest::FinalizeBlock(begin_block))
             .await
             .unwrap();
 
-        for tx in block_data {
-            let deliver_tx = request::DeliverTx {
-                tx,
-            };
-            consensus_service
-                .handle_request(ConsensusRequest::DeliverTx(deliver_tx))
-                .await
-                .unwrap();
-        }
+        // for tx in block_data {
+        //     let deliver_tx = request::DeliverTx {
+        //         tx,
+        //     };
+        //     consensus_service
+        //         .handle_request(ConsensusRequest::DeliverTx(deliver_tx))
+        //         .await
+        //         .unwrap();
+        // }
 
-        let end_block = request::EndBlock {
-            height: 1u32.into(),
-        };
-        consensus_service
-            .handle_request(ConsensusRequest::EndBlock(end_block))
-            .await
-            .unwrap();
-        consensus_service
-            .handle_request(ConsensusRequest::Commit)
-            .await
-            .unwrap();
+        // let end_block = request::EndBlock {
+        //     height: 1u32.into(),
+        // };
+        // consensus_service
+        //     .handle_request(ConsensusRequest::EndBlock(end_block))
+        //     .await
+        //     .unwrap();
+        // consensus_service
+        //     .handle_request(ConsensusRequest::Commit)
+        //     .await
+        //     .unwrap();
     }
 }
