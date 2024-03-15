@@ -9,7 +9,7 @@
 #[path = ""]
 pub mod execution {
     #[path = "astria.execution.v1alpha1.rs"]
-    pub mod v1alpha1;
+    pub mod v1;
 
     #[path = "astria.execution.v1alpha2.rs"]
     pub mod v1alpha2;
@@ -23,6 +23,6 @@ pub mod primitive {
 
 #[path = ""]
 pub mod sequencer {
-    #[path = "astria.sequencer.v1alpha1.rs"]
-    pub mod v1alpha1;
+    #[path = "astria.sequencer.v1.rs"]
+    pub mod v1;
 }

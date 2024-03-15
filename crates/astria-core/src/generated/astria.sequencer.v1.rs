@@ -1,77 +1,3 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum AbciErrorCode {
-    Unspecified = 0,
-    UnknownPath = 1,
-    InvalidParameter = 2,
-    InternalError = 3,
-    InvalidNonce = 4,
-    TransactionTooLarge = 5,
-}
-impl AbciErrorCode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            AbciErrorCode::Unspecified => "ABCI_ERROR_CODE_UNSPECIFIED",
-            AbciErrorCode::UnknownPath => "ABCI_ERROR_CODE_UNKNOWN_PATH",
-            AbciErrorCode::InvalidParameter => "ABCI_ERROR_CODE_INVALID_PARAMETER",
-            AbciErrorCode::InternalError => "ABCI_ERROR_CODE_INTERNAL_ERROR",
-            AbciErrorCode::InvalidNonce => "ABCI_ERROR_CODE_INVALID_NONCE",
-            AbciErrorCode::TransactionTooLarge => "ABCI_ERROR_CODE_TRANSACTION_TOO_LARGE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "ABCI_ERROR_CODE_UNSPECIFIED" => Some(Self::Unspecified),
-            "ABCI_ERROR_CODE_UNKNOWN_PATH" => Some(Self::UnknownPath),
-            "ABCI_ERROR_CODE_INVALID_PARAMETER" => Some(Self::InvalidParameter),
-            "ABCI_ERROR_CODE_INTERNAL_ERROR" => Some(Self::InternalError),
-            "ABCI_ERROR_CODE_INVALID_NONCE" => Some(Self::InvalidNonce),
-            "ABCI_ERROR_CODE_TRANSACTION_TOO_LARGE" => Some(Self::TransactionTooLarge),
-            _ => None,
-        }
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AssetBalance {
-    #[prost(string, tag = "1")]
-    pub denom: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub balance: ::core::option::Option<super::super::primitive::v1::Uint128>,
-}
-/// A response containing the balance of an account.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct BalanceResponse {
-    #[prost(uint64, tag = "2")]
-    pub height: u64,
-    #[prost(message, repeated, tag = "3")]
-    pub balances: ::prost::alloc::vec::Vec<AssetBalance>,
-}
-/// A response containing the current nonce for an account.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct NonceResponse {
-    #[prost(uint64, tag = "2")]
-    pub height: u64,
-    #[prost(uint32, tag = "3")]
-    pub nonce: u32,
-}
-/// / Represents a denomination of some asset used within the sequencer.
-/// / The `id` is used to identify the asset and for balance accounting.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Denom {
-    #[prost(bytes = "vec", tag = "1")]
-    pub id: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag = "2")]
-    pub base_denom: ::prost::alloc::string::String,
-}
 /// A proof for a tree of the given size containing the audit path from a leaf to the root.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -221,7 +147,7 @@ pub struct FilteredSequencerBlock {
     #[prost(message, optional, tag = "4")]
     pub rollup_transactions_proof: ::core::option::Option<Proof>,
     /// The rollup IDs for which `CelestiaRollupBlob`s were submitted to celestia.
-    /// Corresponds to the `astria.sequencer.v1alpha1.RollupTransactions.rollup_id` field
+    /// Corresponds to the `astria.sequencer.v1.RollupTransactions.rollup_id` field
     /// and is extracted from `astria.sequencer.v1alpha.SequencerBlock.rollup_transactions`.
     /// Note that these are all the rollup IDs in the sequencer block, not merely those in
     /// `rollup_transactions` field. This is necessary to prove that no rollup IDs were omitted.
@@ -262,6 +188,80 @@ pub mod rollup_data {
         Deposit(super::Deposit),
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AbciErrorCode {
+    Unspecified = 0,
+    UnknownPath = 1,
+    InvalidParameter = 2,
+    InternalError = 3,
+    InvalidNonce = 4,
+    TransactionTooLarge = 5,
+}
+impl AbciErrorCode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            AbciErrorCode::Unspecified => "ABCI_ERROR_CODE_UNSPECIFIED",
+            AbciErrorCode::UnknownPath => "ABCI_ERROR_CODE_UNKNOWN_PATH",
+            AbciErrorCode::InvalidParameter => "ABCI_ERROR_CODE_INVALID_PARAMETER",
+            AbciErrorCode::InternalError => "ABCI_ERROR_CODE_INTERNAL_ERROR",
+            AbciErrorCode::InvalidNonce => "ABCI_ERROR_CODE_INVALID_NONCE",
+            AbciErrorCode::TransactionTooLarge => "ABCI_ERROR_CODE_TRANSACTION_TOO_LARGE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ABCI_ERROR_CODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "ABCI_ERROR_CODE_UNKNOWN_PATH" => Some(Self::UnknownPath),
+            "ABCI_ERROR_CODE_INVALID_PARAMETER" => Some(Self::InvalidParameter),
+            "ABCI_ERROR_CODE_INTERNAL_ERROR" => Some(Self::InternalError),
+            "ABCI_ERROR_CODE_INVALID_NONCE" => Some(Self::InvalidNonce),
+            "ABCI_ERROR_CODE_TRANSACTION_TOO_LARGE" => Some(Self::TransactionTooLarge),
+            _ => None,
+        }
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssetBalance {
+    #[prost(string, tag = "1")]
+    pub denom: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub balance: ::core::option::Option<super::super::primitive::v1::Uint128>,
+}
+/// A response containing the balance of an account.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BalanceResponse {
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub balances: ::prost::alloc::vec::Vec<AssetBalance>,
+}
+/// A response containing the current nonce for an account.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NonceResponse {
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    #[prost(uint32, tag = "3")]
+    pub nonce: u32,
+}
+/// / Represents a denomination of some asset used within the sequencer.
+/// / The `id` is used to identify the asset and for balance accounting.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Denom {
+    #[prost(bytes = "vec", tag = "1")]
+    pub id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub base_denom: ::prost::alloc::string::String,
+}
 /// A collection of transactions belonging to a specific rollup that are submitted to celestia.
 ///
 /// The transactions contained in the item belong to a rollup identified
@@ -274,7 +274,7 @@ pub struct CelestiaRollupBlob {
     #[prost(bytes = "vec", tag = "1")]
     pub sequencer_block_hash: ::prost::alloc::vec::Vec<u8>,
     /// The 32 bytes identifying the rollup this blob belongs to. Matches
-    /// `astria.sequencer.v1alpha1.RollupTransactions.rollup_id`
+    /// `astria.sequencer.v1.RollupTransactions.rollup_id`
     #[prost(bytes = "vec", tag = "2")]
     pub rollup_id: ::prost::alloc::vec::Vec<u8>,
     /// A list of opaque bytes that are serialized rollup transactions.
@@ -303,7 +303,7 @@ pub struct CelestiaSequencerBlob {
     #[prost(message, optional, tag = "2")]
     pub header: ::core::option::Option<SequencerBlockHeader>,
     /// The rollup IDs for which `CelestiaRollupBlob`s were submitted to celestia.
-    /// Corresponds to the `astria.sequencer.v1alpha1.RollupTransactions.rollup_id` field
+    /// Corresponds to the `astria.sequencer.v1.RollupTransactions.rollup_id` field
     /// and is extracted from `astria.sequencer.v1alpha.SequencerBlock.rollup_transactions`.
     #[prost(bytes = "vec", repeated, tag = "3")]
     pub rollup_ids: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
@@ -435,13 +435,13 @@ pub mod sequencer_service_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/astria.sequencer.v1alpha1.SequencerService/GetSequencerBlock",
+                "/astria.sequencer.v1.SequencerService/GetSequencerBlock",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
-                        "astria.sequencer.v1alpha1.SequencerService",
+                        "astria.sequencer.v1.SequencerService",
                         "GetSequencerBlock",
                     ),
                 );
@@ -467,13 +467,13 @@ pub mod sequencer_service_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/astria.sequencer.v1alpha1.SequencerService/GetFilteredSequencerBlock",
+                "/astria.sequencer.v1.SequencerService/GetFilteredSequencerBlock",
             );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(
                     GrpcMethod::new(
-                        "astria.sequencer.v1alpha1.SequencerService",
+                        "astria.sequencer.v1.SequencerService",
                         "GetFilteredSequencerBlock",
                     ),
                 );
@@ -583,7 +583,7 @@ pub mod sequencer_service_server {
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             let inner = self.inner.clone();
             match req.uri().path() {
-                "/astria.sequencer.v1alpha1.SequencerService/GetSequencerBlock" => {
+                "/astria.sequencer.v1.SequencerService/GetSequencerBlock" => {
                     #[allow(non_camel_case_types)]
                     struct GetSequencerBlockSvc<T: SequencerService>(pub Arc<T>);
                     impl<
@@ -633,7 +633,7 @@ pub mod sequencer_service_server {
                     };
                     Box::pin(fut)
                 }
-                "/astria.sequencer.v1alpha1.SequencerService/GetFilteredSequencerBlock" => {
+                "/astria.sequencer.v1.SequencerService/GetFilteredSequencerBlock" => {
                     #[allow(non_camel_case_types)]
                     struct GetFilteredSequencerBlockSvc<T: SequencerService>(pub Arc<T>);
                     impl<
@@ -724,7 +724,7 @@ pub mod sequencer_service_server {
         }
     }
     impl<T: SequencerService> tonic::server::NamedService for SequencerServiceServer<T> {
-        const NAME: &'static str = "astria.sequencer.v1alpha1.SequencerService";
+        const NAME: &'static str = "astria.sequencer.v1.SequencerService";
     }
 }
 /// `SignedTransaction` is a transaction that has
