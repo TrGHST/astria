@@ -39,8 +39,8 @@ pub(super) struct RollupInfo {
 /// Information about the a block that was converted to blobs.
 #[derive(Debug, serde::Serialize)]
 pub(super) struct ConversionInfo {
-    //#[serde(serialize_with = "serialize_height")]
-    pub(super) sequencer_height: u64,
+    #[serde(serialize_with = "serialize_height")]
+    pub(super) sequencer_height: SequencerHeight,
     #[serde(serialize_with = "serialize_namespace")]
     pub(super) sequencer_namespace: Namespace,
     pub(super) rollups: Vec<RollupInfo>,
@@ -60,7 +60,7 @@ pub(super) fn convert(block: SequencerBlock) -> eyre::Result<Converted> {
     // the rest for the rollup blobs.
     let mut blobs = Vec::with_capacity(rollup_blobs.len() + 1);
     let sequencer_namespace = celestia_client::celestia_namespace_v0_from_cometbft_chain_id(
-        sequencer_blob.header().chain_id(),
+        sequencer_blob.header().chain_id().as_str(),
     );
 
     let header_blob = Blob::new(

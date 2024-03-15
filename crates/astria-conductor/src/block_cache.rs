@@ -12,17 +12,17 @@ use pin_project_lite::pin_project;
 use sequencer_client::tendermint::block::Height;
 
 pub(crate) trait GetSequencerHeight {
-    fn get_height(&self) -> u64;
+    fn get_height(&self) -> Height;
 }
 
 impl GetSequencerHeight for FilteredSequencerBlock {
-    fn get_height(&self) -> u64 {
+    fn get_height(&self) -> Height {
         self.height()
     }
 }
 
 impl GetSequencerHeight for CelestiaSequencerBlob {
-    fn get_height(&self) -> u64 {
+    fn get_height(&self) -> Height {
         self.height()
     }
 }
@@ -81,7 +81,7 @@ impl<T: GetSequencerHeight> BlockCache<T> {
     /// Return an error if a block already exists at that height.
     pub(crate) fn insert(&mut self, block: T) -> Result<(), Error> {
         use std::collections::btree_map::Entry;
-        let block_height = block.get_height();
+        let block_height = block.get_height().value();
         if block_height < self.next_height {
             return Err(Error::Old {
                 block_height,
@@ -139,7 +139,7 @@ mod tests {
 
     #[derive(Debug)]
     struct DummyBlock {
-        height: u64,
+        height: Height,
     }
 
     impl From<u32> for DummyBlock {
@@ -150,8 +150,16 @@ mod tests {
         }
     }
 
+    impl From<Height> for DummyBlock {
+        fn from(height: Height) -> DummyBlock {
+            DummyBlock {
+                height,
+            }
+        }
+    }
+
     impl GetSequencerHeight for DummyBlock {
-        fn get_height(&self) -> u64 {
+        fn get_height(&self) -> Height {
             self.height
         }
     }
@@ -172,9 +180,9 @@ mod tests {
         cache.insert(1u32.into()).unwrap();
         cache.insert(2u32.into()).unwrap();
         cache.insert(3u32.into()).unwrap();
-        assert_eq!(1, cache.pop().unwrap().height);
-        assert_eq!(2, cache.pop().unwrap().height);
-        assert_eq!(3, cache.pop().unwrap().height);
+        assert_eq!(1, cache.pop().unwrap().height.value());
+        assert_eq!(2, cache.pop().unwrap().height.value());
+        assert_eq!(3, cache.pop().unwrap().height.value());
         assert!(cache.pop().is_none());
     }
 
@@ -200,11 +208,11 @@ mod tests {
         let mut cache = make_cache();
         cache.insert(1u32.into()).unwrap();
         cache.insert(3u32.into()).unwrap();
-        assert_eq!(1, cache.pop().unwrap().height);
+        assert_eq!(1, cache.pop().unwrap().height.value());
         assert!(cache.pop().is_none());
         cache.insert(2u32.into()).unwrap();
-        assert_eq!(2, cache.pop().unwrap().height);
-        assert_eq!(3, cache.pop().unwrap().height);
+        assert_eq!(2, cache.pop().unwrap().height.value());
+        assert_eq!(3, cache.pop().unwrap().height.value());
         assert!(cache.pop().is_none());
     }
 
@@ -212,7 +220,7 @@ mod tests {
     async fn awaited_next_block_pops_block() {
         let mut cache = make_cache();
         cache.insert(1u32.into()).unwrap();
-        assert_eq!(1, cache.next_block().await.unwrap().height);
+        assert_eq!(1, cache.next_block().await.unwrap().height.value());
         assert!(cache.pop().is_none());
     }
 

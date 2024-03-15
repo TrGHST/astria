@@ -506,14 +506,14 @@ impl CelestiaSequencerBlob {
 
     /// Returns the sequencer's `CometBFT` chain ID.
     #[must_use]
-    pub fn cometbft_chain_id(&self) -> &str {
-        &self.header.chain_id()
+    pub fn cometbft_chain_id(&self) -> &tendermint::chain::Id {
+        self.header.chain_id()
     }
 
     /// Returns the `CometBFT` height stored in the header of the [`SequencerBlock`] this blob was
     /// derived from.
     #[must_use]
-    pub fn height(&self) -> u64 {
+    pub fn height(&self) -> tendermint::block::Height {
         self.header.height()
     }
 

@@ -337,8 +337,8 @@ enum SequencerBlockErrorKind {
 /// a `[SequencerBlockHeader]`.
 #[derive(Debug)]
 pub struct SequencerBlockHeaderParts {
-    pub chain_id: String,
-    pub height: u64,
+    pub chain_id: tendermint::chain::Id,
+    pub height: tendermint::block::Height,
     pub time: Time,
     pub rollup_transactions_root: [u8; 32],
     pub rollup_ids_root: [u8; 32],
@@ -350,8 +350,8 @@ pub struct SequencerBlockHeaderParts {
 pub struct SequencerBlockHeader {
     // the cometbft header for this sequencer block
     // cometbft_header: tendermint::block::header::Header,
-    chain_id: String,
-    height: u64,
+    chain_id: tendermint::chain::Id,
+    height: tendermint::block::Height,
     time: Time,
     // the 32-byte merkle root of all the rollup transactions in the block
     rollup_transactions_root: [u8; 32],
@@ -363,12 +363,12 @@ pub struct SequencerBlockHeader {
 
 impl SequencerBlockHeader {
     #[must_use]
-    pub fn chain_id(&self) -> &str {
+    pub fn chain_id(&self) -> &tendermint::chain::Id {
         &self.chain_id
     }
 
     #[must_use]
-    pub fn height(&self) -> u64 {
+    pub fn height(&self) -> tendermint::block::Height {
         self.height
     }
 
@@ -424,8 +424,8 @@ impl SequencerBlockHeader {
     pub fn into_raw(self) -> raw::SequencerBlockHeader {
         let time: tendermint_proto::google::protobuf::Timestamp = self.time.into();
         raw::SequencerBlockHeader {
-            chain_id: self.chain_id,
-            height: self.height,
+            chain_id: self.chain_id.to_string(),
+            height: self.height.value(),
             time: Some(prost_types::Timestamp {
                 seconds: time.seconds,
                 nanos: time.nanos,
@@ -455,6 +455,13 @@ impl SequencerBlockHeader {
             data_hash,
             proposer_address,
         } = raw;
+
+        let chain_id = tendermint::chain::Id::try_from(chain_id)
+            .map_err(SequencerBlockHeaderError::invalid_chain_id)?;
+
+        let height = tendermint::block::Height::try_from(height)
+            .map_err(SequencerBlockHeaderError::invalid_height)?;
+
         let Some(time) = time else {
             return Err(SequencerBlockHeaderError::field_not_set("time"));
         };
@@ -496,6 +503,14 @@ impl SequencerBlockHeader {
 pub struct SequencerBlockHeaderError(SequencerBlockHeaderErrorKind);
 
 impl SequencerBlockHeaderError {
+    fn invalid_chain_id(source: tendermint::Error) -> Self {
+        Self(SequencerBlockHeaderErrorKind::InvalidChainId(source))
+    }
+
+    fn invalid_height(source: tendermint::Error) -> Self {
+        Self(SequencerBlockHeaderErrorKind::InvalidHeight(source))
+    }
+
     fn field_not_set(field: &'static str) -> Self {
         Self(SequencerBlockHeaderErrorKind::FieldNotSet(field))
     }
@@ -521,6 +536,10 @@ impl SequencerBlockHeaderError {
 
 #[derive(Debug, thiserror::Error)]
 enum SequencerBlockHeaderErrorKind {
+    #[error("the chain ID in the raw protobuf sequencer block header was invalid")]
+    InvalidChainId(#[source] tendermint::Error),
+    #[error("the height in the raw protobuf sequencer block header was invalid")]
+    InvalidHeight(#[source] tendermint::Error),
     #[error("the expected field in the raw source type was not set: `{0}`")]
     FieldNotSet(&'static str),
     #[error("failed to create a tendermint time from the raw protobuf time")]
@@ -596,7 +615,7 @@ impl SequencerBlock {
 
     /// The height stored in this sequencer block.
     #[must_use]
-    pub fn height(&self) -> u64 {
+    pub fn height(&self) -> tendermint::block::Height {
         self.header.height
     }
 
@@ -849,8 +868,8 @@ impl SequencerBlock {
         Ok(Self {
             block_hash,
             header: SequencerBlockHeader {
-                chain_id: cometbft_header.chain_id.to_string(),
-                height: cometbft_header.height.into(),
+                chain_id: cometbft_header.chain_id,
+                height: cometbft_header.height,
                 time: cometbft_header.time,
                 rollup_transactions_root,
                 rollup_ids_root,
@@ -1010,7 +1029,7 @@ impl FilteredSequencerBlock {
     }
 
     #[must_use]
-    pub fn height(&self) -> u64 {
+    pub fn height(&self) -> tendermint::block::Height {
         self.header.height
     }
 

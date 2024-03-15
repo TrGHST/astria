@@ -49,10 +49,7 @@ use futures::{
 };
 use futures_bounded::FuturesMap;
 use pin_project_lite::pin_project;
-use sequencer_client::tendermint::{
-    self,
-    block::Height as SequencerHeight,
-};
+use sequencer_client::tendermint::block::Height as SequencerHeight;
 use telemetry::display::{
     hex,
     json,
@@ -113,13 +110,13 @@ pub(crate) struct ReconstructedBlock {
 }
 
 impl ReconstructedBlock {
-    pub(crate) fn sequencer_height(&self) -> u64 {
+    pub(crate) fn sequencer_height(&self) -> SequencerHeight {
         self.header.height()
     }
 }
 
 impl GetSequencerHeight for ReconstructedBlock {
-    fn get_height(&self) -> u64 {
+    fn get_height(&self) -> SequencerHeight {
         self.sequencer_height()
     }
 }
@@ -587,7 +584,7 @@ async fn fetch_blocks_at_celestia_height(
 #[instrument(
     skip_all,
     fields(
-        blob.sequencer_height = sequencer_blob.height(),
+        blob.sequencer_height = sequencer_blob.height().value(),
         blob.block_hash = %hex(&sequencer_blob.block_hash()),
         celestia_rollup_namespace = %hex(rollup_namespace.as_bytes()),
     ),
