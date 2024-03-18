@@ -84,14 +84,11 @@ pub struct SequencerBlockHeader {
     /// Corresponds to `MHT(astria.sequencer.v1alpha.SequencerBlock.rollup_transactions)`,
     #[prost(bytes = "vec", tag = "4")]
     pub rollup_transactions_root: ::prost::alloc::vec::Vec<u8>,
-    /// The 32-byte merkle root of all the rollup IDs in the block.
-    #[prost(bytes = "vec", tag = "5")]
-    pub rollup_ids_root: ::prost::alloc::vec::Vec<u8>,
     /// the data_hash of the sequencer block (merkle root of all transaction hashes)
-    #[prost(bytes = "vec", tag = "6")]
+    #[prost(bytes = "vec", tag = "5")]
     pub data_hash: ::prost::alloc::vec::Vec<u8>,
     /// the cometbft proposer address of the sequencer block
-    #[prost(bytes = "vec", tag = "7")]
+    #[prost(bytes = "vec", tag = "6")]
     pub proposer_address: ::prost::alloc::vec::Vec<u8>,
 }
 /// `Deposit` represents a deposit from the sequencer

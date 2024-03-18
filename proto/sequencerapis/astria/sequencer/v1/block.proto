@@ -63,12 +63,10 @@ message SequencerBlockHeader {
   // The 32-byte merkle root of all the rollup transactions in the block,
   // Corresponds to `MHT(astria.sequencer.v1alpha.SequencerBlock.rollup_transactions)`,
   bytes rollup_transactions_root = 4;
-  // The 32-byte merkle root of all the rollup IDs in the block.
-  bytes rollup_ids_root = 5;
   // the data_hash of the sequencer block (merkle root of all transaction hashes)
-  bytes data_hash = 6;
+  bytes data_hash = 5;
   // the cometbft proposer address of the sequencer block
-  bytes proposer_address = 7;
+  bytes proposer_address = 6;
 }
 
 // `Deposit` represents a deposit from the sequencer

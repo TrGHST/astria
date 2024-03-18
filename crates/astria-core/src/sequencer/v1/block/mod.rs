@@ -243,8 +243,8 @@ impl SequencerBlockError {
         Self(SequencerBlockErrorKind::InvalidRollupTransactionsRoot)
     }
 
-    fn invalid_rollup_ids_root() -> Self {
-        Self(SequencerBlockErrorKind::InvalidRollupIdsRoot)
+    fn invalid_rollup_ids_proof() -> Self {
+        Self(SequencerBlockErrorKind::InvalidRollupIdsProof)
     }
 }
 
@@ -325,10 +325,10 @@ enum SequencerBlockErrorKind {
     )]
     InvalidRollupTransactionsRoot,
     #[error(
-        "the rollup IDs root in the header did not verify against data_hash given the rollup IDs \
-         proof"
+        "the rollup IDs root constructed from the block's rollup IDs did not verify against \
+         data_hash given the rollup IDs proof"
     )]
-    InvalidRollupIdsRoot,
+    InvalidRollupIdsProof,
 }
 
 /// The individual parts that make up a [`SequencerBlockHeader`].
@@ -341,7 +341,6 @@ pub struct SequencerBlockHeaderParts {
     pub height: tendermint::block::Height,
     pub time: Time,
     pub rollup_transactions_root: [u8; 32],
-    pub rollup_ids_root: [u8; 32],
     pub data_hash: [u8; 32],
     pub proposer_address: account::Id,
 }
@@ -355,8 +354,6 @@ pub struct SequencerBlockHeader {
     time: Time,
     // the 32-byte merkle root of all the rollup transactions in the block
     rollup_transactions_root: [u8; 32],
-    // the 32-byte merkle root of all the rollup IDs in the block
-    rollup_ids_root: [u8; 32],
     data_hash: [u8; 32],
     proposer_address: account::Id,
 }
@@ -383,11 +380,6 @@ impl SequencerBlockHeader {
     }
 
     #[must_use]
-    pub fn rollup_ids_root(&self) -> [u8; 32] {
-        self.rollup_ids_root
-    }
-
-    #[must_use]
     pub fn data_hash(&self) -> [u8; 32] {
         self.data_hash
     }
@@ -405,7 +397,6 @@ impl SequencerBlockHeader {
             height,
             time,
             rollup_transactions_root,
-            rollup_ids_root,
             data_hash,
             proposer_address,
         } = self;
@@ -414,7 +405,6 @@ impl SequencerBlockHeader {
             height,
             time,
             rollup_transactions_root,
-            rollup_ids_root,
             data_hash,
             proposer_address,
         }
@@ -431,7 +421,6 @@ impl SequencerBlockHeader {
                 nanos: time.nanos,
             }),
             rollup_transactions_root: self.rollup_transactions_root.to_vec(),
-            rollup_ids_root: self.rollup_ids_root.to_vec(),
             data_hash: self.data_hash.to_vec(),
             proposer_address: self.proposer_address.as_bytes().to_vec(),
         }
@@ -444,14 +433,12 @@ impl SequencerBlockHeader {
     /// - If the `cometbft_header` field is not set.
     /// - If the `cometbft_header` field cannot be converted.
     /// - If the `rollup_transactions_root` field is not 32 bytes long.
-    /// - If the `rollup_ids_root` field is not 32 bytes long.
     pub fn try_from_raw(raw: raw::SequencerBlockHeader) -> Result<Self, SequencerBlockHeaderError> {
         let raw::SequencerBlockHeader {
             chain_id,
             height,
             time,
             rollup_transactions_root,
-            rollup_ids_root,
             data_hash,
             proposer_address,
         } = raw;
@@ -475,9 +462,6 @@ impl SequencerBlockHeader {
             rollup_transactions_root.try_into().map_err(|e: Vec<_>| {
                 SequencerBlockHeaderError::incorrect_rollup_transactions_root_length(e.len())
             })?;
-        let rollup_ids_root = rollup_ids_root.try_into().map_err(|e: Vec<_>| {
-            SequencerBlockHeaderError::incorrect_rollup_ids_root_length(e.len())
-        })?;
 
         let data_hash = data_hash.try_into().map_err(|e: Vec<_>| {
             SequencerBlockHeaderError::incorrect_rollup_transactions_root_length(e.len())
@@ -491,7 +475,6 @@ impl SequencerBlockHeader {
             height,
             time,
             rollup_transactions_root,
-            rollup_ids_root,
             data_hash,
             proposer_address,
         })
@@ -523,12 +506,6 @@ impl SequencerBlockHeaderError {
         Self(SequencerBlockHeaderErrorKind::IncorrectRollupTransactionsRootLength(len))
     }
 
-    fn incorrect_rollup_ids_root_length(len: usize) -> Self {
-        Self(SequencerBlockHeaderErrorKind::IncorrectRollupIdsRootLength(
-            len,
-        ))
-    }
-
     fn proposer_address(source: tendermint::Error) -> Self {
         Self(SequencerBlockHeaderErrorKind::ProposerAddress(source))
     }
@@ -549,11 +526,6 @@ enum SequencerBlockHeaderErrorKind {
          long, but was actually `{0}`"
     )]
     IncorrectRollupTransactionsRootLength(usize),
-    #[error(
-        "the rollup ID root in the cometbft block.data field was expected to be 32 bytes long, \
-         but was actually `{0}`"
-    )]
-    IncorrectRollupIdsRootLength(usize),
     #[error(
         "the proposer address in the raw protobuf sequencer block header was not 20 bytes long"
     )]
@@ -786,109 +758,6 @@ impl SequencerBlock {
             data,
             deposits,
         )
-
-        // let mut data_list = data.into_iter();
-        // let rollup_transactions_root: [u8; 32] = data_list
-        //     .next()
-        //     .ok_or(SequencerBlockError::no_rollup_transactions_root())?
-        //     .try_into()
-        //     .map_err(|e: Vec<_>| {
-        //         SequencerBlockError::incorrect_rollup_transactions_root_length(e.len())
-        //     })?;
-
-        // let rollup_ids_root: [u8; 32] = data_list
-        //     .next()
-        //     .ok_or(SequencerBlockError::no_rollup_ids_root())?
-        //     .try_into()
-        //     .map_err(|e: Vec<_>|
-        // SequencerBlockError::incorrect_rollup_ids_root_length(e.len()))?;
-
-        // let mut rollup_datas = IndexMap::new();
-        // for elem in data_list {
-        //     let raw_tx = raw::SignedTransaction::decode(&*elem)
-        //         .map_err(SequencerBlockError::signed_transaction_protobuf_decode)?;
-        //     let signed_tx = SignedTransaction::try_from_raw(raw_tx)
-        //         .map_err(SequencerBlockError::raw_signed_transaction_conversion)?;
-        //     for action in signed_tx.into_unsigned().actions {
-        //         if let action::Action::Sequence(action::SequenceAction {
-        //             rollup_id,
-        //             data,
-        //             fee_asset_id: _,
-        //         }) = action
-        //         {
-        //             let elem = rollup_datas.entry(rollup_id).or_insert(vec![]);
-        //             let data = RollupData::SequencedData(data).into_raw().encode_to_vec();
-        //             elem.push(data);
-        //         }
-        //     }
-        // }
-        // for (id, deposits) in deposits {
-        //     rollup_datas.entry(id).or_default().extend(
-        //         deposits
-        //             .into_iter()
-        //             .map(|deposit| RollupData::Deposit(deposit).into_raw().encode_to_vec()),
-        //     );
-        // }
-
-        // // XXX: The rollup data must be sorted by its keys before constructing the merkle tree.
-        // // Since it's constructed from non-deterministically ordered sources, there is otherwise
-        // no // guarantee that the same data will give the root.
-        // rollup_datas.sort_unstable_keys();
-
-        // // ensure the rollup IDs commitment matches the one calculated from the rollup data
-        // if rollup_ids_root != merkle::Tree::from_leaves(rollup_datas.keys()).root() {
-        //     return Err(SequencerBlockError::rollup_ids_root_does_not_match_reconstructed());
-        // }
-
-        // let rollup_transaction_tree = derive_merkle_tree_from_rollup_txs(&rollup_datas);
-        // if rollup_transactions_root != rollup_transaction_tree.root() {
-        //     return Err(
-        //         SequencerBlockError::rollup_transactions_root_does_not_match_reconstructed(),
-        //     );
-        // }
-
-        // let mut rollup_transactions = IndexMap::new();
-        // for (i, (id, data)) in rollup_datas.into_iter().enumerate() {
-        //     let proof = rollup_transaction_tree
-        //         .construct_proof(i)
-        //         .expect("the proof must exist because the tree was derived with the same leaf");
-        //     rollup_transactions.insert(
-        //         id,
-        //         RollupTransactions {
-        //             id,
-        //             transactions: data, // TODO: rename this field?
-        //             proof,
-        //         },
-        //     );
-        // }
-        // rollup_transactions.sort_unstable_keys();
-
-        // // action tree root is always the first tx in a block
-        // let rollup_transactions_proof = tree.construct_proof(0).expect(
-        //     "the tree has at least one leaf; if this line is reached and `construct_proof` \
-        //      returns None it means that the short circuiting checks above it have been removed",
-        // );
-
-        // let rollup_ids_proof = tree.construct_proof(1).expect(
-        //     "the tree has at least two leaves; if this line is reached and `construct_proof` \
-        //      returns None it means that the short circuiting checks above it have been removed",
-        // );
-
-        // Ok(Self {
-        //     block_hash,
-        //     header: SequencerBlockHeader {
-        //         chain_id: cometbft_header.chain_id,
-        //         height: cometbft_header.height,
-        //         time: cometbft_header.time,
-        //         rollup_transactions_root,
-        //         rollup_ids_root,
-        //         data_hash,
-        //         proposer_address: cometbft_header.proposer_address,
-        //     },
-        //     rollup_transactions,
-        //     rollup_transactions_proof,
-        //     rollup_ids_proof,
-        // })
     }
 
     pub fn try_from_block_info_and_data(
@@ -998,7 +867,6 @@ impl SequencerBlock {
                 height,
                 time,
                 rollup_transactions_root,
-                rollup_ids_root,
                 data_hash,
                 proposer_address,
             },
@@ -1057,7 +925,7 @@ impl SequencerBlock {
             SequencerBlockHeader::try_from_raw(header).map_err(SequencerBlockError::header)
         }?;
 
-        let rollup_transactions = rollup_transactions
+        let rollup_transactions: IndexMap<RollupId, RollupTransactions> = rollup_transactions
             .into_iter()
             .map(rollup_txs_to_tuple)
             .collect::<Result<_, _>>()
@@ -1071,8 +939,9 @@ impl SequencerBlock {
             return Err(SequencerBlockError::invalid_rollup_transactions_root());
         };
 
-        if !rollup_ids_proof.verify(&Sha256::digest(header.rollup_ids_root), data_hash) {
-            return Err(SequencerBlockError::invalid_rollup_ids_root());
+        let rollup_ids_root = merkle::Tree::from_leaves(rollup_transactions.keys()).root();
+        if !rollup_ids_proof.verify(&Sha256::digest(rollup_ids_root), data_hash) {
+            return Err(SequencerBlockError::invalid_rollup_ids_proof());
         };
 
         if !are_rollup_txs_included(&rollup_transactions, &rollup_transactions_proof, data_hash) {
