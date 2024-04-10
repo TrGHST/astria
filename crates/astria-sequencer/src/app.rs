@@ -37,6 +37,7 @@ use sha2::{
 use tendermint::{
     abci::{
         self,
+        request::BeginBlock,
         Event,
     },
     account,
@@ -144,6 +145,9 @@ pub(crate) struct App {
     // builder of the current `SequencerBlock`.
     // initialized during `begin_block`, completed and written to state during `end_block`.
     current_sequencer_block_builder: Option<SequencerBlockBuilder>,
+
+    // hack - remove later
+    begin_block: Option<BeginBlock>,
 }
 
 impl App {
@@ -162,6 +166,7 @@ impl App {
             processed_txs: 0,
             current_proposer: None,
             current_sequencer_block_builder: None,
+            begin_block: None,
         }
     }
 
@@ -377,7 +382,7 @@ impl App {
                 > MAX_SEQUENCE_DATA_BYTES_PER_BLOCK
             {
                 debug!(
-                    transaction_hash = %telemetry::display::hex(&tx_hash),
+                    transaction_hash = %telemetry::display::base64(&tx_hash),
                     included_data_bytes = block_sequence_data_bytes,
                     tx_data_bytes = tx_sequence_data_bytes,
                     max_data_bytes = MAX_SEQUENCE_DATA_BYTES_PER_BLOCK,
@@ -397,7 +402,7 @@ impl App {
                 }
                 Err(e) => {
                     debug!(
-                        transaction_hash = %telemetry::display::hex(&tx_hash),
+                        transaction_hash = %telemetry::display::base64(&tx_hash),
                         error = AsRef::<dyn std::error::Error>::as_ref(&e),
                         "failed to execute transaction, not including in block"
                     );
@@ -438,12 +443,14 @@ impl App {
             self.update_state_for_new_round(&storage);
         }
 
-        let mut state_tx = StateDelta::new(self.state.clone());
+        self.begin_block = Some(begin_block.clone());
 
-        // store the block height
-        state_tx.put_block_height(begin_block.header.height.into());
-        // store the block time
-        state_tx.put_block_timestamp(begin_block.header.time);
+        let state_tx = StateDelta::new(self.state.clone());
+
+        // // store the block height
+        // state_tx.put_block_height(begin_block.header.height.into());
+        // // store the block time
+        // state_tx.put_block_timestamp(begin_block.header.time);
 
         // call begin_block on all components
         let mut arc_state_tx = Arc::new(state_tx);
@@ -453,9 +460,9 @@ impl App {
         AuthorityComponent::begin_block(&mut arc_state_tx, begin_block)
             .await
             .context("failed to call begin_block on AuthorityComponent")?;
-        IbcComponent::begin_block(&mut arc_state_tx, begin_block)
-            .await
-            .context("failed to call begin_block on IbcComponent")?;
+        // IbcComponent::begin_block(&mut arc_state_tx, begin_block)
+        //     .await
+        //     .context("failed to call begin_block on IbcComponent")?;
 
         let state_tx = Arc::try_unwrap(arc_state_tx)
             .expect("components should not retain copies of shared state");
@@ -474,7 +481,7 @@ impl App {
     /// Note that the first two "transactions" in the block, which are the proposer-generated
     /// commitments, are ignored.
     #[instrument(name = "App::deliver_tx_after_proposal", skip_all, fields(
-        tx_hash =  %telemetry::display::hex(&Sha256::digest(&tx.tx)),
+        tx_hash =  %telemetry::display::base64(&Sha256::digest(&tx.tx)),
     ))]
     pub(crate) async fn deliver_tx_after_proposal(
         &mut self,
@@ -529,7 +536,7 @@ impl App {
     ///
     /// Note that `begin_block` is now called *after* transaction execution.
     #[instrument(name = "App::deliver_tx", skip_all, fields(
-        signed_transaction_hash = %telemetry::display::hex(&signed_tx.sha256_of_proto_encoding()),
+        signed_transaction_hash = %telemetry::display::base64(&signed_tx.sha256_of_proto_encoding()),
         sender = %Address::from_verification_key(signed_tx.verification_key()),
     ))]
     pub(crate) async fn deliver_tx(
@@ -575,8 +582,25 @@ impl App {
     ) -> anyhow::Result<abci::response::EndBlock> {
         use crate::api_state_ext::StateWriteExt as _;
 
-        let state_tx = StateDelta::new(self.state.clone());
+        let mut state_tx = StateDelta::new(self.state.clone());
+
+        // hack - do IBC begin_block stuff here, as we forgot to do it in prepare/process_proposal
+        // :/
+        let begin_block = self
+            .begin_block
+            .as_ref()
+            .expect("begin_block must be called before end_block, thus begin_block must be set");
+
+        // store the block height
+        state_tx.put_block_height(begin_block.header.height.into());
+        // store the block time
+        state_tx.put_block_timestamp(begin_block.header.time);
+
         let mut arc_state_tx = Arc::new(state_tx);
+
+        IbcComponent::begin_block(&mut arc_state_tx, begin_block)
+            .await
+            .context("failed to call begin_block on IbcComponent")?;
 
         // call end_block on all components
         AccountsComponent::end_block(&mut arc_state_tx, end_block)
@@ -701,7 +725,7 @@ impl App {
             .await
             .expect("must be able to successfully commit to storage");
         tracing::debug!(
-            app_hash = %telemetry::display::hex(&app_hash),
+            app_hash = %telemetry::display::base64(&app_hash),
             "finished committing state",
         );
 
@@ -773,6 +797,38 @@ fn signed_transaction_from_bytes(bytes: &[u8]) -> anyhow::Result<SignedTransacti
 }
 
 #[cfg(test)]
+pub(crate) mod test_utils {
+    use astria_core::sequencer::v1::{
+        Address,
+        ADDRESS_LEN,
+    };
+    use ed25519_consensus::SigningKey;
+
+    // attempts to decode the given hex string into an address.
+    pub(crate) fn address_from_hex_string(s: &str) -> Address {
+        let bytes = hex::decode(s).unwrap();
+        let arr: [u8; ADDRESS_LEN] = bytes.try_into().unwrap();
+        Address::from_array(arr)
+    }
+
+    pub(crate) const ALICE_ADDRESS: &str = "1c0c490f1b5528d8173c5de46d131160e4b2c0c3";
+    pub(crate) const BOB_ADDRESS: &str = "34fec43c7fcab9aef3b3cf8aba855e41ee69ca3a";
+    pub(crate) const CAROL_ADDRESS: &str = "60709e2d391864b732b4f0f51e387abb76743871";
+
+    pub(crate) fn get_alice_signing_key_and_address() -> (SigningKey, Address) {
+        // this secret key corresponds to ALICE_ADDRESS
+        let alice_secret_bytes: [u8; 32] =
+            hex::decode("2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let alice_signing_key = SigningKey::from(alice_secret_bytes);
+        let alice = Address::from_verification_key(alice_signing_key.verification_key());
+        (alice_signing_key, alice)
+    }
+}
+
+#[cfg(test)]
 mod test {
     #[cfg(feature = "mint")]
     use astria_core::sequencer::v1::transaction::action::MintAction;
@@ -786,7 +842,6 @@ mod test {
             TransferAction,
         },
         UnsignedTransaction,
-        ADDRESS_LEN,
     };
     use ed25519_consensus::SigningKey;
     use penumbra_ibc::params::IBCParameters;
@@ -805,6 +860,7 @@ mod test {
     use super::*;
     use crate::{
         accounts::action::TRANSFER_FEE,
+        app::test_utils::*,
         asset::get_native_asset,
         authority::state_ext::ValidatorSet,
         genesis::Account,
@@ -812,17 +868,6 @@ mod test {
         sequence::calculate_fee,
         transaction::InvalidNonce,
     };
-
-    /// attempts to decode the given hex string into an address.
-    fn address_from_hex_string(s: &str) -> Address {
-        let bytes = hex::decode(s).unwrap();
-        let arr: [u8; ADDRESS_LEN] = bytes.try_into().unwrap();
-        Address::from_array(arr)
-    }
-
-    const ALICE_ADDRESS: &str = "1c0c490f1b5528d8173c5de46d131160e4b2c0c3";
-    const BOB_ADDRESS: &str = "34fec43c7fcab9aef3b3cf8aba855e41ee69ca3a";
-    const CAROL_ADDRESS: &str = "60709e2d391864b732b4f0f51e387abb76743871";
 
     fn default_genesis_accounts() -> Vec<Account> {
         vec![
@@ -897,18 +942,6 @@ mod test {
         let (app, _storage) = initialize_app_with_storage(genesis_state, genesis_validators).await;
 
         app
-    }
-
-    fn get_alice_signing_key_and_address() -> (SigningKey, Address) {
-        // this secret key corresponds to ALICE_ADDRESS
-        let alice_secret_bytes: [u8; 32] =
-            hex::decode("2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90")
-                .unwrap()
-                .try_into()
-                .unwrap();
-        let alice_signing_key = SigningKey::from(alice_secret_bytes);
-        let alice = Address::from_verification_key(alice_signing_key.verification_key());
-        (alice_signing_key, alice)
     }
 
     #[tokio::test]
